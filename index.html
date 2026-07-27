@@ -1,0 +1,665 @@
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Калькулятор зарплаты «на руки → начислено» · ITNIMAX</title>
+
+<!--
+  ============================================================================
+  КОНФИГУРАЦИЯ СТАВОК.
+  Это единственное место, которое нужно править при смене года / ставок.
+  Логику расчёта трогать не нужно.
+  Суммы вычетов — в рублях, ставки — долей единицы (0.13 = 13%).
+  ============================================================================
+-->
+<script type="application/json" id="rates-config">
+{
+  "year": 2026,
+  "rates_valid_from": "01.01.2026",
+  "employee": {
+    "fszn_rate": 0.01,
+    "income_tax_rate": 0.13,
+    "union_rate_default": 0.01,
+    "dpns_rate_min": 0.01,
+    "dpns_rate_max": 0.10
+  },
+  "deductions": {
+    "personal": 216,
+    "personal_income_threshold": 1308,
+    "child": 63,
+    "child_enhanced": 120,
+    "special_category": 306
+  },
+  "employer": {
+    "fszn_pension_rate": 0.28,
+    "fszn_social_rate": 0.06,
+    "belgosstrakh_rate_default": 0.006,
+    "dpns_employer_match_max": 0.03
+  }
+}
+</script>
+
+<style>
+:root {
+  color-scheme: light;
+  --plane:      #f9f9f7;
+  --surface:    #fcfcfb;
+  --raised:     #f2f2ee;
+  --ink:        #0b0b0b;
+  --ink-2:      #52514e;
+  --muted:      #898781;
+  --line:       rgba(11,11,11,0.10);
+  --line-hard:  #e1e0d9;
+  --accent:     #2a78d6;
+  --good:       #006300;
+  --warn:       #8a5a00;
+  /* Категориальные слоты — состав начисленной суммы */
+  --s-net:      #2a78d6;
+  --s-tax:      #eb6834;
+  --s-fszn:     #1baf7a;
+  --s-dpns:     #eda100;
+  --s-union:    #e87ba4;
+}
+@media (prefers-color-scheme: dark) {
+  :root:where(:not([data-theme="light"])) {
+    color-scheme: dark;
+    --plane:     #0d0d0d;
+    --surface:   #1a1a19;
+    --raised:    #232322;
+    --ink:       #ffffff;
+    --ink-2:     #c3c2b7;
+    --muted:     #898781;
+    --line:      rgba(255,255,255,0.10);
+    --line-hard: #2c2c2a;
+    --accent:    #3987e5;
+    --good:      #0ca30c;
+    --warn:      #fab219;
+    --s-net:     #3987e5;
+    --s-tax:     #d95926;
+    --s-fszn:    #199e70;
+    --s-dpns:    #c98500;
+    --s-union:   #d55181;
+  }
+}
+
+* { box-sizing: border-box; }
+html { -webkit-text-size-adjust: 100%; }
+body {
+  margin: 0; padding: 0 16px 56px;
+  background: var(--plane); color: var(--ink);
+  font: 15px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif;
+}
+.app { max-width: 1120px; margin: 0 auto; }
+
+/* ------------------------------- Шапка ------------------------------- */
+.bar {
+  display: flex; align-items: center; gap: 14px; flex-wrap: wrap;
+  padding: 22px 2px 18px;
+}
+.bar h1 { font-size: 17px; font-weight: 600; margin: 0; letter-spacing: -0.1px; }
+.bar .sub { font-size: 13px; color: var(--muted); margin-top: 2px; }
+.spacer { flex: 1 1 auto; }
+.pill {
+  font-size: 12px; font-weight: 600; color: var(--ink-2);
+  background: var(--surface); border: 1px solid var(--line);
+  padding: 5px 11px; border-radius: 999px; white-space: nowrap; cursor: help;
+}
+.pill b { color: var(--ink); }
+
+/* ------------------------------ Переключатель ------------------------------ */
+.switch {
+  display: inline-flex; gap: 3px; padding: 3px; margin-bottom: 16px;
+  background: var(--raised); border-radius: 11px; max-width: 100%; flex-wrap: wrap;
+}
+.switch button {
+  border: 0; background: transparent; color: var(--ink-2); cursor: pointer;
+  font: inherit; font-size: 13.5px; font-weight: 550;
+  padding: 8px 15px; border-radius: 9px; white-space: nowrap;
+}
+.switch button:hover { color: var(--ink); }
+.switch button[aria-pressed="true"] {
+  background: var(--surface); color: var(--ink);
+  box-shadow: 0 1px 2px rgba(0,0,0,.08); border: 1px solid var(--line);
+  padding: 7px 14px;
+}
+
+/* -------------------------------- Сетка -------------------------------- */
+.grid { display: grid; grid-template-columns: minmax(0,0.92fr) minmax(0,1fr); gap: 16px; align-items: start; }
+@media (max-width: 900px) { .grid { grid-template-columns: 1fr; } }
+
+.panel {
+  background: var(--surface); border: 1px solid var(--line);
+  border-radius: 14px; padding: 18px;
+}
+.panel + .panel { margin-top: 16px; }
+.panel > h2 {
+  font-size: 11px; text-transform: uppercase; letter-spacing: 0.8px;
+  color: var(--muted); font-weight: 650; margin: 0 0 14px;
+}
+@media (min-width: 901px) { .col-right { position: sticky; top: 16px; } }
+
+/* -------------------------------- Поля -------------------------------- */
+.amount { position: relative; }
+.amount label { display: block; font-size: 13px; color: var(--ink-2); margin-bottom: 7px; }
+.amount input {
+  width: 100%; font: inherit; font-size: 30px; font-weight: 620; letter-spacing: -0.5px;
+  padding: 12px 52px 12px 14px; color: var(--ink);
+  background: var(--plane); border: 1px solid var(--line-hard); border-radius: 11px;
+}
+.amount .unit {
+  position: absolute; right: 16px; bottom: 17px;
+  color: var(--muted); font-size: 17px; pointer-events: none;
+}
+input:focus-visible, button:focus-visible, summary:focus-visible {
+  outline: 2px solid var(--accent); outline-offset: 1px;
+}
+
+.opt {
+  display: flex; align-items: center; gap: 12px;
+  padding: 11px 0; border-top: 1px solid var(--line);
+}
+.opt:first-of-type { border-top: 0; }
+.opt .name { flex: 1 1 auto; font-size: 14px; }
+.opt .name em { display: block; font-style: normal; font-size: 12px; color: var(--muted); margin-top: 1px; }
+
+/* Степпер */
+.stepper { display: flex; align-items: center; gap: 2px; background: var(--raised); border-radius: 9px; padding: 2px; }
+.stepper button {
+  width: 28px; height: 28px; border: 0; border-radius: 7px; cursor: pointer;
+  background: transparent; color: var(--ink-2); font: inherit; font-size: 17px; line-height: 1;
+}
+.stepper button:hover { background: var(--surface); color: var(--ink); }
+.stepper input {
+  width: 34px; text-align: center; border: 0; background: transparent; color: var(--ink);
+  font: inherit; font-weight: 600; padding: 0; -moz-appearance: textfield; appearance: textfield;
+}
+.stepper input::-webkit-outer-spin-button, .stepper input::-webkit-inner-spin-button { -webkit-appearance: none; margin: 0; }
+
+/* Тумблер */
+.toggle { position: relative; width: 40px; height: 23px; flex: none; }
+.toggle input { position: absolute; inset: 0; opacity: 0; margin: 0; cursor: pointer; z-index: 2; width: 100%; height: 100%; }
+.toggle span {
+  position: absolute; inset: 0; background: var(--line-hard); border-radius: 999px; transition: background .15s;
+}
+.toggle span::after {
+  content: ""; position: absolute; top: 3px; left: 3px; width: 17px; height: 17px;
+  background: #fff; border-radius: 50%; transition: transform .15s; box-shadow: 0 1px 2px rgba(0,0,0,.25);
+}
+.toggle input:checked + span { background: var(--accent); }
+.toggle input:checked + span::after { transform: translateX(17px); }
+
+/* Мелкие числовые поля */
+.mini { display: inline-flex; align-items: center; gap: 5px; }
+.mini input {
+  width: 62px; font: inherit; font-size: 14px; text-align: right; color: var(--ink);
+  padding: 6px 8px; background: var(--plane); border: 1px solid var(--line-hard); border-radius: 8px;
+}
+.mini .u { color: var(--muted); font-size: 13px; }
+.mini[hidden] { display: none; }
+
+/* -------------------------------- Результат -------------------------------- */
+.hero { text-align: center; padding: 4px 0 16px; }
+.hero .cap { font-size: 11px; text-transform: uppercase; letter-spacing: 0.8px; color: var(--muted); font-weight: 650; }
+.hero .fig { font-size: 52px; font-weight: 660; letter-spacing: -1.5px; line-height: 1.1; margin-top: 6px; }
+.hero .fig small { font-size: 20px; font-weight: 500; color: var(--muted); letter-spacing: 0; }
+.chip {
+  display: inline-flex; align-items: center; gap: 7px; margin-top: 12px;
+  font-size: 12.5px; padding: 5px 12px; border-radius: 999px;
+  background: var(--raised); color: var(--ink-2); text-align: left;
+}
+.chip.ok { color: var(--good); }
+.chip.warn { color: var(--warn); }
+.chip .dotmark { width: 7px; height: 7px; border-radius: 50%; background: currentColor; flex: none; }
+
+/* Полоса состава */
+.bar-viz { display: flex; gap: 2px; height: 34px; margin: 4px 0 14px; }
+.bar-viz i {
+  display: flex; align-items: center; justify-content: center; min-width: 3px;
+  font-style: normal; font-size: 11px; font-weight: 650; color: #fff;
+  border-radius: 3px; overflow: hidden;
+}
+.bar-viz i:first-child { border-radius: 7px 3px 3px 7px; }
+.bar-viz i:last-child { border-radius: 3px 7px 7px 3px; }
+
+/* Таблица-легенда */
+table { width: 100%; border-collapse: collapse; font-size: 14px; }
+td { padding: 8px 0; }
+td.num { text-align: right; white-space: nowrap; font-variant-numeric: tabular-nums; }
+td.pc { text-align: right; white-space: nowrap; width: 52px; color: var(--muted); font-size: 12.5px; font-variant-numeric: tabular-nums; }
+.dot { display: inline-block; width: 10px; height: 10px; border-radius: 3px; margin-right: 9px; vertical-align: -1px; }
+tr.head td { border-bottom: 1px solid var(--line); padding-bottom: 10px; font-weight: 620; }
+tr.foot td { border-top: 1px solid var(--line); padding-top: 11px; font-weight: 650; }
+.muted { color: var(--muted); }
+.small { font-size: 12.5px; }
+
+/* Раскрывающиеся блоки */
+details { border-top: 1px solid var(--line); }
+details summary {
+  cursor: pointer; list-style: none; padding: 12px 0 12px 20px; position: relative;
+  font-size: 13px; color: var(--ink-2); font-weight: 550;
+}
+details summary::-webkit-details-marker { display: none; }
+details summary::before {
+  content: "›"; position: absolute; left: 4px; top: 11px;
+  color: var(--muted); font-size: 15px; transition: transform .15s; display: inline-block;
+}
+details[open] summary::before { transform: rotate(90deg); }
+details summary:hover { color: var(--ink); }
+.details-body { padding: 0 0 14px; font-size: 13.5px; color: var(--ink-2); }
+.details-body p { margin: 0 0 9px; }
+.details-body table { font-size: 13.5px; }
+.details-body td { padding: 6px 0; }
+
+.foot-notes { margin-top: 18px; background: var(--surface); border: 1px solid var(--line); border-radius: 14px; padding: 0 18px; }
+.foot-notes details:first-child { border-top: 0; }
+</style>
+
+<div class="app">
+  <div class="bar">
+    <div>
+      <h1>Зарплата «на руки» → «начислено»</h1>
+      <div class="sub">Республика Беларусь · штатный сотрудник · <b>ITNIMAX</b></div>
+    </div>
+    <div class="spacer"></div>
+    <div class="pill" id="rates-pill">Ставки <b></b></div>
+  </div>
+
+  <div class="switch" role="group" aria-label="Режим расчёта">
+    <button type="button" id="mode-net" aria-pressed="true">Знаю «на руки»</button>
+    <button type="button" id="mode-gross" aria-pressed="false">Знаю «начислено»</button>
+  </div>
+
+  <div class="grid">
+    <!-- ================= ВВОД ================= -->
+    <div>
+      <div class="panel">
+        <div class="amount">
+          <label for="amount" id="amount-label">Сумма «на руки» за месяц</label>
+          <input type="text" id="amount" value="1500" inputmode="decimal" autocomplete="off">
+          <span class="unit">р.</span>
+        </div>
+      </div>
+
+      <div class="panel">
+        <h2>Вычеты</h2>
+
+        <div class="opt">
+          <div class="name">Дети и иждивенцы<em id="hint-child"></em></div>
+          <div class="stepper">
+            <button type="button" data-step="children" data-d="-1" aria-label="Меньше">−</button>
+            <input type="number" id="children" value="0" min="0" step="1" aria-label="Дети и иждивенцы">
+            <button type="button" data-step="children" data-d="1" aria-label="Больше">+</button>
+          </div>
+        </div>
+
+        <div class="opt">
+          <div class="name">Дети, повышенный вычет<em id="hint-child-enh"></em></div>
+          <div class="stepper">
+            <button type="button" data-step="children-enh" data-d="-1" aria-label="Меньше">−</button>
+            <input type="number" id="children-enh" value="0" min="0" step="1" aria-label="Дети, повышенный вычет">
+            <button type="button" data-step="children-enh" data-d="1" aria-label="Больше">+</button>
+          </div>
+        </div>
+
+        <div class="opt">
+          <div class="name">Особая льготная категория<em id="hint-special"></em></div>
+          <label class="toggle"><input type="checkbox" id="special"><span></span></label>
+        </div>
+
+        <div class="opt">
+          <div class="name">Социальные вычеты за месяц<em>Обучение, страхование, взносы по ДПНС — по документам</em></div>
+          <div class="mini"><input type="text" id="social" value="0" inputmode="decimal" autocomplete="off"><span class="u">р.</span></div>
+        </div>
+      </div>
+
+      <div class="panel">
+        <h2>Удержания по заявлению</h2>
+
+        <div class="opt">
+          <div class="name">Член профсоюза<em>От начисленного, налоговую базу не уменьшает</em></div>
+          <div class="mini" id="union-wrap" hidden><input type="number" id="union-rate" value="1" min="0" max="100" step="0.1"><span class="u">%</span></div>
+          <label class="toggle"><input type="checkbox" id="union"><span></span></label>
+        </div>
+
+        <div class="opt">
+          <div class="name">Участвует в ДПНС<em>Указ №367, «три плюс три»</em></div>
+          <div class="mini" id="dpns-wrap" hidden><input type="number" id="dpns-rate" value="3" min="1" max="10" step="1"><span class="u">%</span></div>
+          <label class="toggle"><input type="checkbox" id="dpns"><span></span></label>
+        </div>
+      </div>
+    </div>
+
+    <!-- ================= РЕЗУЛЬТАТ ================= -->
+    <div class="col-right">
+      <div class="panel">
+        <div class="hero">
+          <div class="cap" id="res-cap">Начислить</div>
+          <div class="fig"><span id="res-val">—</span> <small>р.</small></div>
+          <div class="chip" id="check-chip"><span class="dotmark"></span><span id="check-text"></span></div>
+        </div>
+
+        <div class="bar-viz" id="viz"></div>
+        <table id="breakdown"></table>
+        <div class="small muted" id="personal-note" style="margin-top:10px"></div>
+
+        <details id="tax-details" style="margin-top:6px">
+          <summary>Как получился подоходный налог</summary>
+          <div class="details-body"><table id="tax-table"></table></div>
+        </details>
+      </div>
+
+      <div class="panel">
+        <h2>Стоимость сотрудника для нанимателя</h2>
+        <table id="employer"></table>
+        <div class="opt" style="border-top:1px solid var(--line); margin-top:6px">
+          <div class="name muted small">Ставка Белгосстраха зависит от класса риска организации</div>
+          <div class="mini"><input type="number" id="belgos" value="0.6" min="0" max="100" step="0.01"><span class="u">%</span></div>
+        </div>
+        <div class="small muted" id="employer-note"></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="foot-notes">
+    <details>
+      <summary>Порядок расчёта</summary>
+      <div class="details-body">
+        <p>Все удержания считаются от начисленной суммы (Gross):</p>
+        <p>ФСЗН 1% → ДПНС 1–10% → налоговая база = остаток минус вычеты → подоходный налог 13%.
+           Профсоюзный взнос идёт параллельно: считается от Gross и налоговую базу не уменьшает.</p>
+        <p id="fn-personal"></p>
+        <p>Обратная задача решается подбором, а не формулой. Функция «на руки от начислено» немонотонна:
+           на пороге личного вычета сумма на руки падает скачком, поэтому диапазон делится на два отрезка
+           и берётся минимальное начисление, дающее нужную сумму.</p>
+      </div>
+    </details>
+    <details>
+      <summary>Что не входит в расчёт</summary>
+      <div class="details-body">
+        <p>Налог на сверхдоходы 25%/30% — годовая декларация при доходе свыше 350 000 р., не часть ежемесячного расчёта.
+           Имущественные вычеты. Удержания по исполнительным листам. Внешние совместители и работающие по ГПХ —
+           это отдельные калькуляторы.</p>
+      </div>
+    </details>
+    <details>
+      <summary>Перед использованием в работе</summary>
+      <div class="details-body">
+        <p>Сверьте ставки и суммы вычетов с действующей редакцией НК на текущий год — часть из них меняется ежегодно.
+           Уточните ставку Белгосстраха для конкретного клиента. Прогоните пару реальных расчётных листков
+           через режим «знаю начислено» и сверьте с бухгалтерской программой.</p>
+      </div>
+    </details>
+  </div>
+</div>
+
+<script>
+"use strict";
+
+/* ===========================================================================
+   Все денежные суммы внутри расчёта — целое число КОПЕЕК.
+   Это убирает погрешности плавающей точки и даёт точность до копейки.
+   =========================================================================== */
+
+const R = JSON.parse(document.getElementById("rates-config").textContent);
+
+const rub = (x) => Math.round(x * 100);            // рубли конфига -> копейки
+const D = {
+  personal:  rub(R.deductions.personal),
+  threshold: rub(R.deductions.personal_income_threshold),
+  child:     rub(R.deductions.child),
+  childEnh:  rub(R.deductions.child_enhanced),
+  special:   rub(R.deductions.special_category)
+};
+
+/* --------------------------------------------------------------------------
+   ПРЯМОЙ РАСЧЁТ: начислено -> на руки. Единственное место, где живут правила.
+   -------------------------------------------------------------------------- */
+function calc(grossK, p) {
+  const fsznK = Math.round(grossK * R.employee.fszn_rate);
+  const dpnsK = p.dpnsRate > 0 ? Math.round(grossK * p.dpnsRate) : 0;
+
+  // «Доход, подлежащий налогообложению» — с ним сравнивается порог личного вычета.
+  const subjectK = grossK - fsznK - dpnsK;
+
+  const personalK = subjectK <= D.threshold ? D.personal : 0;   // порог, а не плавное уменьшение
+  const childrenK = p.children * D.child + p.childrenEnh * D.childEnh;
+  const specialK  = p.special ? D.special : 0;
+  const stdK      = personalK + childrenK + specialK;
+
+  const baseK = Math.max(0, subjectK - stdK - p.socialK);
+  const taxK  = Math.round(baseK * R.employee.income_tax_rate);
+
+  // Профсоюз: от начисленного, параллельно налогу, базу не уменьшает.
+  const unionK = p.unionRate > 0 ? Math.round(grossK * p.unionRate) : 0;
+
+  const netK = grossK - fsznK - dpnsK - taxK - unionK;
+
+  // Наниматель
+  const pensionK = Math.round(grossK * R.employer.fszn_pension_rate);
+  const socInsK  = Math.round(grossK * R.employer.fszn_social_rate);
+  const belgosK  = Math.round(grossK * p.belgosRate);
+  const matchK   = Math.round(grossK * Math.min(p.dpnsRate, R.employer.dpns_employer_match_max));
+  const totalCostK = grossK + pensionK + socInsK + belgosK;   // доплата по ДПНС идёт из 28%, сверху не добавляется
+
+  return { grossK, fsznK, dpnsK, subjectK, personalK, childrenK, specialK, stdK,
+           socialK: p.socialK, baseK, taxK, unionK, netK,
+           pensionK, socInsK, belgosK, matchK, totalCostK };
+}
+
+/* --------------------------------------------------------------------------
+   ОБРАТНЫЙ РАСЧЁТ: на руки -> начислено (goal seek).
+
+   Важно: net(gross) НЕ монотонна. В точке, где облагаемый доход переходит
+   порог 1308 руб., личный вычет пропадает целиком и «на руки» падает скачком
+   на 216 × 13% = 28,08 руб. Поэтому диапазон делится на два отрезка
+   (до порога и после), на каждом функция возрастает, и берётся минимальный
+   Gross, дающий нужную сумму на руки. Границу порога находим численно —
+   алгебру выводить не нужно, и при появлении новых порогов достаточно
+   добавить их в этот список.
+   -------------------------------------------------------------------------- */
+function grossFromNet(targetK, p) {
+  if (targetK <= 0) return calc(0, p);
+
+  // Верхняя граница поиска
+  let hi = Math.max(targetK * 3, 100000);
+  for (let i = 0; i < 40 && calc(hi, p).netK < targetK; i++) hi *= 2;
+
+  // Граница порога личного вычета: максимальный Gross, у которого subject <= 1308
+  const thr = maxWhere(0, hi, (g) => calc(g, p).subjectK <= D.threshold);
+
+  const candidates = [];
+  const a = minGrossOnSegment(0, thr, targetK, p);
+  if (a !== null) candidates.push(a);
+  const b = minGrossOnSegment(thr + 1, hi, targetK, p);
+  if (b !== null) candidates.push(b);
+
+  if (!candidates.length) return calc(hi, p);
+  return calc(Math.min(...candidates), p);
+}
+
+// Максимальное значение в [lo, hi], для которого предикат ещё истинен (предикат монотонно убывает).
+function maxWhere(lo, hi, pred) {
+  if (!pred(lo)) return lo - 1;
+  while (lo < hi) {
+    const mid = Math.ceil((lo + hi) / 2);
+    if (pred(mid)) lo = mid; else hi = mid - 1;
+  }
+  return lo;
+}
+
+// Минимальный Gross на отрезке, при котором на руки >= target (на отрезке функция возрастает).
+function minGrossOnSegment(lo, hi, targetK, p) {
+  if (lo > hi || calc(hi, p).netK < targetK) return null;
+  let l = lo, h = hi;
+  while (l < h) {
+    const mid = Math.floor((l + h) / 2);
+    if (calc(mid, p).netK >= targetK) h = mid; else l = mid + 1;
+  }
+  // Локальная доводка: округление копеек может дать 1–2 копейки дрожания рядом с найденной точкой.
+  for (let g = Math.max(lo, l - 300); g < l; g++) {
+    if (calc(g, p).netK >= targetK) return g;
+  }
+  return l;
+}
+
+/* ----------------------------- Утилиты ----------------------------- */
+const fmt = (k) => (k / 100).toLocaleString("ru-RU", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+const pct = (r) => (r * 100).toLocaleString("ru-RU", { maximumFractionDigits: 3 });
+
+function parseMoney(s) {
+  const v = parseFloat(String(s).replace(/\s| /g, "").replace(",", "."));
+  return isFinite(v) && v > 0 ? Math.round(v * 100) : 0;
+}
+function parseRate(el, min, max, fallback) {
+  let v = parseFloat(String(el.value).replace(",", "."));
+  if (!isFinite(v)) v = fallback;
+  v = Math.min(Math.max(v, min), max);
+  return v / 100;
+}
+const $ = (id) => document.getElementById(id);
+const esc = (s) => String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;");
+
+/* ------------------------------ Состояние ------------------------------ */
+let mode = "net"; // "net" — знаем на руки; "gross" — знаем начислено
+
+function readParams() {
+  return {
+    children:    Math.max(0, parseInt($("children").value, 10) || 0),
+    childrenEnh: Math.max(0, parseInt($("children-enh").value, 10) || 0),
+    special:     $("special").checked,
+    socialK:     parseMoney($("social").value),
+    unionRate:   $("union").checked ? parseRate($("union-rate"), 0, 100, 1) : 0,
+    dpnsRate:    $("dpns").checked
+                   ? parseRate($("dpns-rate"), R.employee.dpns_rate_min * 100, R.employee.dpns_rate_max * 100, 3)
+                   : 0,
+    belgosRate:  parseRate($("belgos"), 0, 100, R.employer.belgosstrakh_rate_default * 100)
+  };
+}
+
+function render() {
+  const p = readParams();
+  const amountK = parseMoney($("amount").value);
+  const r = mode === "net" ? grossFromNet(amountK, p) : calc(amountK, p);
+
+  $("res-cap").textContent = mode === "net" ? "Начислить" : "На руки";
+  $("res-val").textContent = fmt(mode === "net" ? r.grossK : r.netK);
+
+  /* --- Состав начисленной суммы: полоса + таблица-легенда (одни и те же данные) --- */
+  const parts = [
+    { key: "net",   name: "На руки",                                              val: r.netK,   color: "var(--s-net)" },
+    { key: "tax",   name: "Подоходный налог, " + pct(R.employee.income_tax_rate) + "%", val: r.taxK, color: "var(--s-tax)" },
+    { key: "fszn",  name: "ФСЗН с сотрудника, " + pct(R.employee.fszn_rate) + "%", val: r.fsznK,  color: "var(--s-fszn)" },
+    { key: "dpns",  name: "ДПНС, " + pct(p.dpnsRate) + "%",                        val: r.dpnsK,  color: "var(--s-dpns)" },
+    { key: "union", name: "Профсоюз, " + pct(p.unionRate) + "%",                   val: r.unionK, color: "var(--s-union)" }
+  ].filter((x) => x.val > 0);
+
+  const total = r.grossK || 1;
+  $("viz").innerHTML = parts.map((x) => {
+    const share = x.val / total;
+    const label = share >= 0.09 ? Math.round(share * 100) + "%" : "";
+    return `<i style="flex:${x.val};background:${x.color}" title="${esc(x.name)}: ${fmt(x.val)} р.">${label}</i>`;
+  }).join("");
+
+  const rows = [`<tr class="head"><td>Начислено</td><td class="num">${fmt(r.grossK)}</td><td class="pc">100%</td></tr>`];
+  parts.forEach((x) => {
+    rows.push(`<tr><td><span class="dot" style="background:${x.color}"></span>${esc(x.name)}</td>`
+      + `<td class="num">${fmt(x.val)}</td>`
+      + `<td class="pc">${(x.val / total * 100).toFixed(1).replace(".", ",")}%</td></tr>`);
+  });
+  $("breakdown").innerHTML = rows.join("");
+
+  /* --- Проверка обратного расчёта --- */
+  const chip = $("check-chip"), text = $("check-text");
+  if (!amountK) {
+    chip.className = "chip";
+    text.textContent = mode === "net" ? "Введите сумму «на руки»" : "Введите начисленную сумму";
+  } else if (mode === "net") {
+    const diffK = r.netK - amountK;
+    chip.className = diffK === 0 ? "chip ok" : "chip warn";
+    text.textContent = diffK === 0
+      ? "На руки выходит ровно " + fmt(amountK) + " р."
+      : "Ровно " + fmt(amountK) + " р. не достигается: ближайшее — " + fmt(r.netK) + " р. (+" + fmt(diffK) + " р.)";
+  } else {
+    chip.className = "chip";
+    text.textContent = "Начислено " + fmt(r.grossK) + " р.";
+  }
+
+  /* --- Личный вычет: показываем как результат, а не как инструкцию --- */
+  $("personal-note").textContent = r.personalK
+    ? "Личный вычет " + fmt(D.personal) + " р. применён: облагаемый доход " + fmt(r.subjectK)
+      + " р. не выше порога " + fmt(D.threshold) + " р."
+    : "Личный вычет " + fmt(D.personal) + " р. не применяется: облагаемый доход " + fmt(r.subjectK)
+      + " р. выше порога " + fmt(D.threshold) + " р.";
+
+  /* --- Детализация налоговой базы --- */
+  const t = [];
+  t.push(`<tr><td>Начислено минус ФСЗН и ДПНС</td><td class="num">${fmt(r.subjectK)}</td></tr>`);
+  if (r.personalK) t.push(`<tr><td class="muted">− личный вычет</td><td class="num muted">${fmt(r.personalK)}</td></tr>`);
+  if (r.childrenK) t.push(`<tr><td class="muted">− на детей и иждивенцев</td><td class="num muted">${fmt(r.childrenK)}</td></tr>`);
+  if (r.specialK)  t.push(`<tr><td class="muted">− льготная категория</td><td class="num muted">${fmt(r.specialK)}</td></tr>`);
+  if (r.socialK)   t.push(`<tr><td class="muted">− социальные вычеты</td><td class="num muted">${fmt(r.socialK)}</td></tr>`);
+  t.push(`<tr class="foot"><td>Налоговая база</td><td class="num">${fmt(r.baseK)}</td></tr>`);
+  t.push(`<tr><td>Налог, ${pct(R.employee.income_tax_rate)}% от базы</td><td class="num">${fmt(r.taxK)}</td></tr>`);
+  $("tax-table").innerHTML = t.join("");
+
+  /* --- Наниматель --- */
+  const e = [];
+  e.push(`<tr><td>Начислено (ФОТ)</td><td class="num">${fmt(r.grossK)}</td></tr>`);
+  e.push(`<tr><td class="muted">ФСЗН, пенсионное страхование, ${pct(R.employer.fszn_pension_rate)}%</td><td class="num muted">${fmt(r.pensionK)}</td></tr>`);
+  e.push(`<tr><td class="muted">ФСЗН, социальное страхование, ${pct(R.employer.fszn_social_rate)}%</td><td class="num muted">${fmt(r.socInsK)}</td></tr>`);
+  e.push(`<tr><td class="muted">Белгосстрах, ${pct(p.belgosRate)}%</td><td class="num muted">${fmt(r.belgosK)}</td></tr>`);
+  e.push(`<tr class="foot"><td>Итого расходы</td><td class="num">${fmt(r.totalCostK)}</td></tr>`);
+  $("employer").innerHTML = e.join("");
+
+  $("employer-note").textContent = r.matchK
+    ? "Доплата нанимателя по ДПНС " + pct(Math.min(p.dpnsRate, R.employer.dpns_employer_match_max)) + "% = "
+      + fmt(r.matchK) + " р. перераспределяется из 28% пенсионного взноса и в итог не добавляется."
+    : "";
+}
+
+/* ------------------------------ Инициализация ------------------------------ */
+$("rates-pill").querySelector("b").textContent = R.year + " г.";
+$("rates-pill").title = "Ставки и суммы вычетов актуальны на " + R.rates_valid_from
+  + ". Часть из них меняется ежегодно — сверьтесь перед использованием в работе.";
+$("hint-child").textContent = fmt(D.child) + " р. за каждого, без ограничения по доходу";
+$("hint-child-enh").textContent = fmt(D.childEnh) + " р.: одинокие и приёмные родители, вдовы, опекуны, 2+ детей";
+$("hint-special").textContent = fmt(D.special) + " р.: инвалиды I и II группы, инвалиды с детства, Герои";
+$("fn-personal").textContent = "Личный вычет " + fmt(D.personal) + " р. применяется, только если начислено за вычетом "
+  + "ФСЗН и ДПНС не превышает " + fmt(D.threshold) + " р. Это порог, а не плавное уменьшение: при превышении "
+  + "вычет не применяется вовсе.";
+$("dpns-rate").min = R.employee.dpns_rate_min * 100;
+$("dpns-rate").max = R.employee.dpns_rate_max * 100;
+$("belgos").value = R.employer.belgosstrakh_rate_default * 100;
+$("union-rate").value = R.employee.union_rate_default * 100;
+
+function setMode(m) {
+  mode = m;
+  $("mode-net").setAttribute("aria-pressed", String(m === "net"));
+  $("mode-gross").setAttribute("aria-pressed", String(m === "gross"));
+  $("amount-label").textContent = m === "net" ? "Сумма «на руки» за месяц" : "Начислено за месяц";
+  render();
+}
+$("mode-net").addEventListener("click", () => setMode("net"));
+$("mode-gross").addEventListener("click", () => setMode("gross"));
+
+// Степперы
+document.querySelectorAll("[data-step]").forEach((b) => {
+  b.addEventListener("click", () => {
+    const el = $(b.dataset.step);
+    el.value = Math.max(0, (parseInt(el.value, 10) || 0) + Number(b.dataset.d));
+    render();
+  });
+});
+
+// Поля процентов появляются только у включённых опций
+const sync = () => {
+  $("union-wrap").hidden = !$("union").checked;
+  $("dpns-wrap").hidden = !$("dpns").checked;
+};
+$("union").addEventListener("change", sync);
+$("dpns").addEventListener("change", sync);
+
+document.addEventListener("input", render);
+document.addEventListener("change", render);
+
+sync();
+render();
+</script>
