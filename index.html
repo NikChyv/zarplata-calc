@@ -255,6 +255,14 @@ details summary:hover { color: var(--ink); }
 .details-body table { font-size: 13.5px; }
 .details-body td { padding: 6px 0; }
 
+.fatal {
+  max-width: 640px; margin: 48px auto; padding: 20px 22px;
+  background: var(--surface); border: 1px solid var(--line); border-left: 4px solid #d03b3b;
+  border-radius: 12px; font-size: 14.5px; line-height: 1.55;
+}
+.fatal b { display: block; margin-bottom: 8px; font-size: 16px; }
+.fatal p { margin: 0 0 8px; color: var(--ink-2); }
+
 .foot-notes { margin-top: 18px; background: var(--surface); border: 1px solid var(--line); border-radius: 14px; padding: 0 18px; }
 .foot-notes details:first-child { border-top: 0; }
 </style>
@@ -405,7 +413,42 @@ details summary:hover { color: var(--ink); }
    Это убирает погрешности плавающей точки и даёт точность до копейки.
    =========================================================================== */
 
-const R = JSON.parse(document.getElementById("rates-config").textContent);
+/* Конфигурацию часто правят прямо в браузере на github.com, без запуска тестов.
+   Поэтому разбираем её с проверкой: при опечатке нужно показать, что именно
+   сломалось, а не белый экран. */
+const R = (function loadRates() {
+  let cfg;
+  try {
+    cfg = JSON.parse(document.getElementById("rates-config").textContent);
+  } catch (err) {
+    fatal("Блок настроек в начале файла — не корректный JSON. Обычно это лишняя или "
+        + "пропущенная запятая. Сообщение браузера: " + err.message);
+  }
+  const required = [
+    "year", "rates_valid_from",
+    "employee.fszn_rate", "employee.income_tax_rate", "employee.union_rate_default",
+    "employee.dpns_rate_min", "employee.dpns_rate_max",
+    "deductions.personal", "deductions.personal_income_threshold",
+    "deductions.child", "deductions.child_enhanced", "deductions.special_category",
+    "employer.fszn_pension_rate", "employer.fszn_social_rate",
+    "employer.belgosstrakh_rate_default", "employer.dpns_employer_match_max"
+  ];
+  const missing = required.filter((path) => {
+    const v = path.split(".").reduce((o, k) => (o == null ? o : o[k]), cfg);
+    return v == null || (typeof v !== "string" && !isFinite(v));
+  });
+  if (missing.length) {
+    fatal("В блоке настроек не хватает значений или они не числа: " + missing.join(", ") + ".");
+  }
+  return cfg;
+
+  function fatal(msg) {
+    document.body.innerHTML = '<div class="fatal"><b>Калькулятор не запустился</b>'
+      + '<p>' + msg.replace(/[<&]/g, "") + '</p>'
+      + '<p>Восстановите блок настроек в начале index.html — расчёт не будет работать, пока он не читается.</p></div>';
+    throw new Error(msg);
+  }
+})();
 
 const rub = (x) => Math.round(x * 100);            // рубли конфига -> копейки
 const D = {
