@@ -474,7 +474,7 @@ function calc(grossK, p) {
   const specialK  = p.special ? D.special : 0;
   const stdK      = personalK + childrenK + specialK;
 
-  const baseK = Math.max(0, subjectK - stdK - p.socialK);
+  const baseK = Math.max(0, subjectK - stdK );
   const taxK  = Math.round(baseK * R.employee.income_tax_rate);
 
   // Профсоюз: от начисленного, параллельно налогу, базу не уменьшает.
