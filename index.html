@@ -467,7 +467,7 @@ function calc(grossK, p) {
   const dpnsK = p.dpnsRate > 0 ? Math.round(grossK * p.dpnsRate) : 0;
 
   // «Доход, подлежащий налогообложению» — с ним сравнивается порог личного вычета.
-  const subjectK = grossK - fsznK - dpnsK;
+  const subjectK = grossK - dpnsK;
 
   const personalK = subjectK <= D.threshold ? D.personal : 0;   // порог, а не плавное уменьшение
   const childrenK = p.children * D.child + p.childrenEnh * D.childEnh;
