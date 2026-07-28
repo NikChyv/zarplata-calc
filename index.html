@@ -166,6 +166,9 @@ input:focus-visible, button:focus-visible, summary:focus-visible {
 .opt:first-of-type { border-top: 0; }
 .opt .name { flex: 1 1 auto; font-size: 14px; }
 .opt .name em { display: block; font-style: normal; font-size: 12px; color: var(--muted); margin-top: 1px; }
+/* Вычеты недоступны по договору подряда — видно, что правило применено */
+.opt.off { opacity: .4; }
+.opt.off input, .opt.off button, .opt.off .toggle { pointer-events: none; }
 
 /* Степпер */
 .stepper { display: flex; align-items: center; gap: 2px; background: var(--raised); border-radius: 9px; padding: 2px; }
@@ -271,7 +274,7 @@ details summary:hover { color: var(--ink); }
   <div class="bar">
     <div>
       <h1>Зарплата «на руки» → «начислено»</h1>
-      <div class="sub">Республика Беларусь · штатный сотрудник · <b>ITNIMAX</b></div>
+      <div class="sub">Республика Беларусь · <span id="kind">штатный сотрудник</span> · <b>ITNIMAX</b></div>
     </div>
     <div class="spacer"></div>
     <div class="pill" id="rates-pill">Ставки <b></b></div>
@@ -297,6 +300,11 @@ details summary:hover { color: var(--ink); }
         <h2>Вычеты</h2>
 
         <div class="opt">
+          <div class="name">Договор подряда (ГПХ)<em>Вычеты не предоставляются</em></div>
+          <label class="toggle"><input type="checkbox" id="contractor"><span></span></label>
+        </div>
+
+        <div class="opt ded">
           <div class="name">Дети и иждивенцы<em id="hint-child"></em></div>
           <div class="stepper">
             <button type="button" data-step="children" data-d="-1" aria-label="Меньше">−</button>
@@ -305,7 +313,7 @@ details summary:hover { color: var(--ink); }
           </div>
         </div>
 
-        <div class="opt">
+        <div class="opt ded">
           <div class="name">Дети, повышенный вычет<em id="hint-child-enh"></em></div>
           <div class="stepper">
             <button type="button" data-step="children-enh" data-d="-1" aria-label="Меньше">−</button>
@@ -314,12 +322,12 @@ details summary:hover { color: var(--ink); }
           </div>
         </div>
 
-        <div class="opt">
+        <div class="opt ded">
           <div class="name">Особая льготная категория<em id="hint-special"></em></div>
           <label class="toggle"><input type="checkbox" id="special"><span></span></label>
         </div>
 
-        <div class="opt">
+        <div class="opt ded">
           <div class="name">Социальные вычеты за месяц<em>Обучение, страхование, взносы по ДПНС — по документам</em></div>
           <div class="mini"><input type="text" id="social" value="0" inputmode="decimal" autocomplete="off"><span class="u">р.</span></div>
         </div>
@@ -390,8 +398,10 @@ details summary:hover { color: var(--ink); }
       <summary>Что не входит в расчёт</summary>
       <div class="details-body">
         <p>Налог на сверхдоходы 25%/30% — годовая декларация при доходе свыше 350 000 р., не часть ежемесячного расчёта.
-           Имущественные вычеты. Удержания по исполнительным листам. Внешние совместители и работающие по ГПХ —
-           это отдельные калькуляторы.</p>
+           Имущественные вычеты. Удержания по исполнительным листам. Внешние совместители.</p>
+        <p>Для договора подряда учтено только одно отличие — вычеты не предоставляются. Остальные правила
+           (взносы в ФСЗН и Белгосстрах по договорам подряда) считаются так же, как по трудовому договору;
+           если по вашим клиентам это не так, скажите — поправим.</p>
       </div>
     </details>
     <details>
@@ -469,12 +479,14 @@ function calc(grossK, p) {
   // «Доход, подлежащий налогообложению» — с ним сравнивается порог личного вычета.
   const subjectK = grossK - dpnsK;
 
-  const personalK = subjectK <= D.threshold ? D.personal : 0;   // порог, а не плавное уменьшение
-  const childrenK = p.children * D.child + p.childrenEnh * D.childEnh;
-  const specialK  = p.special ? D.special : 0;
+  // По договору подряда (ГПХ) вычеты не предоставляются — ни стандартные, ни социальные.
+  const personalK = !p.contractor && subjectK <= D.threshold ? D.personal : 0;   // порог, а не плавное уменьшение
+  const childrenK = p.contractor ? 0 : p.children * D.child + p.childrenEnh * D.childEnh;
+  const specialK  = !p.contractor && p.special ? D.special : 0;
   const stdK      = personalK + childrenK + specialK;
+  const socialK   = p.contractor ? 0 : p.socialK;
 
-  const baseK = Math.max(0, subjectK - stdK );
+  const baseK = Math.max(0, subjectK - stdK - socialK);
   const taxK  = Math.round(baseK * R.employee.income_tax_rate);
 
   // Профсоюз: от начисленного, параллельно налогу, базу не уменьшает.
@@ -490,7 +502,7 @@ function calc(grossK, p) {
   const totalCostK = grossK + pensionK + socInsK + belgosK;   // доплата по ДПНС идёт из 28%, сверху не добавляется
 
   return { grossK, fsznK, dpnsK, subjectK, personalK, childrenK, specialK, stdK,
-           socialK: p.socialK, baseK, taxK, unionK, netK,
+           socialK, contractor: !!p.contractor, baseK, taxK, unionK, netK,
            pensionK, socInsK, belgosK, matchK, totalCostK };
 }
 
@@ -572,6 +584,7 @@ let mode = "net"; // "net" — знаем на руки; "gross" — знаем 
 
 function readParams() {
   return {
+    contractor:  $("contractor").checked,
     children:    Math.max(0, parseInt($("children").value, 10) || 0),
     childrenEnh: Math.max(0, parseInt($("children-enh").value, 10) || 0),
     special:     $("special").checked,
@@ -589,6 +602,7 @@ function render() {
   const amountK = parseMoney($("amount").value);
   const r = mode === "net" ? grossFromNet(amountK, p) : calc(amountK, p);
 
+  $("kind").textContent = p.contractor ? "договор подряда" : "штатный сотрудник";
   $("res-cap").textContent = mode === "net" ? "Начислить" : "На руки";
   $("res-val").textContent = fmt(mode === "net" ? r.grossK : r.netK);
 
@@ -633,11 +647,13 @@ function render() {
   }
 
   /* --- Личный вычет: показываем как результат, а не как инструкцию --- */
-  $("personal-note").textContent = r.personalK
-    ? "Личный вычет " + fmt(D.personal) + " р. применён: облагаемый доход " + fmt(r.subjectK)
-      + " р. не выше порога " + fmt(D.threshold) + " р."
-    : "Личный вычет " + fmt(D.personal) + " р. не применяется: облагаемый доход " + fmt(r.subjectK)
-      + " р. выше порога " + fmt(D.threshold) + " р.";
+  $("personal-note").textContent = r.contractor
+    ? "Договор подряда: вычеты не предоставляются, налог считается со всей суммы после ФСЗН."
+    : r.personalK
+      ? "Личный вычет " + fmt(D.personal) + " р. применён: облагаемый доход " + fmt(r.subjectK)
+        + " р. не выше порога " + fmt(D.threshold) + " р."
+      : "Личный вычет " + fmt(D.personal) + " р. не применяется: облагаемый доход " + fmt(r.subjectK)
+        + " р. выше порога " + fmt(D.threshold) + " р.";
 
   /* --- Детализация налоговой базы --- */
   const t = [];
@@ -653,8 +669,7 @@ function render() {
   /* --- Наниматель --- */
   const e = [];
   e.push(`<tr><td>Начислено (ФОТ)</td><td class="num">${fmt(r.grossK)}</td></tr>`);
-  e.push(`<tr><td class="muted">ФСЗН, пенсионное страхование, ${pct(R.employer.fszn_pension_rate)}%</td><td class="num muted">${fmt(r.pensionK)}</td></tr>`);
-  e.push(`<tr><td class="muted">ФСЗН, социальное страхование, ${pct(R.employer.fszn_social_rate)}%</td><td class="num muted">${fmt(r.socInsK)}</td></tr>`);
+  e.push(`<tr><td class="muted">ФСЗН, ${pct(R.employer.fszn_pension_rate + R.employer.fszn_social_rate)}%</td><td class="num muted">${fmt(r.pensionK + r.socInsK)}</td></tr>`);
   e.push(`<tr><td class="muted">Белгосстрах, ${pct(p.belgosRate)}%</td><td class="num muted">${fmt(r.belgosK)}</td></tr>`);
   e.push(`<tr class="foot"><td>Итого расходы</td><td class="num">${fmt(r.totalCostK)}</td></tr>`);
   $("employer").innerHTML = e.join("");
@@ -703,9 +718,16 @@ document.querySelectorAll("[data-step]").forEach((b) => {
 const sync = () => {
   $("union-wrap").hidden = !$("union").checked;
   $("dpns-wrap").hidden = !$("dpns").checked;
+  // По договору подряда вычеты недоступны — гасим поля, чтобы правило было видно
+  const off = $("contractor").checked;
+  document.querySelectorAll(".opt.ded").forEach((row) => {
+    row.classList.toggle("off", off);
+    row.querySelectorAll("input").forEach((i) => { i.disabled = off; });
+  });
 };
 $("union").addEventListener("change", sync);
 $("dpns").addEventListener("change", sync);
+$("contractor").addEventListener("change", sync);
 
 document.addEventListener("input", render);
 document.addEventListener("change", render);

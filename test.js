@@ -9,7 +9,8 @@ const mod = new Function("R", core + "\nreturn {calc, grossFromNet, D};")(R);
 const { calc, grossFromNet, D } = mod;
 
 const P = (o = {}) => Object.assign(
-  { children: 0, childrenEnh: 0, special: false, socialK: 0, unionRate: 0, dpnsRate: 0, belgosRate: 0.006 }, o);
+  { contractor: false, children: 0, childrenEnh: 0, special: false, socialK: 0,
+    unionRate: 0, dpnsRate: 0, belgosRate: 0.006 }, o);
 const f = (k) => (k / 100).toFixed(2);
 
 let fails = 0;
@@ -100,7 +101,37 @@ eq("Белгосстрах 0.6%", f(r.belgosK), "12.00");
 eq("доплата по ДПНС (макс. 3%, справочно)", f(r.matchK), "60.00");
 eq("итого расходы = 2000+560+120+12", f(r.totalCostK), "2692.00");
 
-console.log("\n--- 9. Граничные случаи ---");
+console.log("\n--- 9. Договор подряда (ГПХ): вычеты не предоставляются ---");
+{
+  // Доход ниже порога 1308 — по трудовому договору личный вычет применился бы.
+  const opts = { children: 2, childrenEnh: 1, special: true, socialK: 10000 };
+  const emp = calc(120000, P(opts));                 // трудовой договор
+  const gph = calc(120000, P({ ...opts, contractor: true }));
+  // 216 личный + 2×63 дети + 120 повышенный + 306 льготная категория + 100 социальный
+  eq("по трудовому договору вычеты есть", f(emp.stdK + emp.socialK), "868.00");
+  eq("по подряду стандартные вычеты обнулены", gph.stdK, 0);
+  eq("по подряду социальные вычеты обнулены", gph.socialK, 0);
+  eq("по подряду база = доход после ФСЗН", f(gph.baseK), f(gph.subjectK));
+  eq("налог по подряду 13% от 1188", f(gph.taxK), "154.44");
+  eq("на руки по подряду 1200-12-154.44", f(gph.netK), "1033.56");
+  const ok = gph.netK < emp.netK;
+  if (!ok) fails++;
+  console.log((ok ? "  OK  " : " FAIL ") + "на руки по подряду меньше: " + f(gph.netK) + " против " + f(emp.netK));
+}
+
+console.log("\n--- 10. Обратный расчёт для подряда ---");
+{
+  const p = P({ contractor: true, children: 3 });
+  [100000, 130000, 200000].forEach((t) => {
+    const g = grossFromNet(t, p);
+    const ok = g.netK >= t && calc(g.grossK - 1, p).netK < t && g.stdK === 0;
+    if (!ok) fails++;
+    console.log((ok ? "  OK  " : " FAIL ") + "цель " + f(t) + " -> начислить " + f(g.grossK) +
+      " -> на руки " + f(g.netK) + ", вычеты " + f(g.stdK));
+  });
+}
+
+console.log("\n--- 11. Граничные случаи ---");
 eq("нулевое начисление -> на руки 0", calc(0, P()).netK, 0);
 eq("база не уходит в минус при большом соц. вычете", calc(100000, P({ socialK: 500000 })).baseK, 0);
 eq("налог при нулевой базе", calc(100000, P({ socialK: 500000 })).taxK, 0);
