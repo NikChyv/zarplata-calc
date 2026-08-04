@@ -56,6 +56,54 @@ if (!html.includes(marker)) {
 ["const rub =", "/* ----------------------------- Утилиты", "function calc(", "function grossFromNet("]
   .forEach((m) => { if (!html.includes(m)) problems.push("в index.html пропала метка «" + m + "», от неё зависит test.js"); });
 
+// ---- Рабочее место бухгалтера: справочник кодов табеля ----
+const hubPath = __dirname + "/buh_hub.html";
+if (fs.existsSync(hubPath)) {
+  const hub = fs.readFileSync(hubPath, "utf8");
+  const hubMarker = 'id="codes-config">';
+
+  if (!hub.includes(hubMarker)) {
+    problems.push("в buh_hub.html нет блока с кодами табеля (script id=\"codes-config\")");
+  } else {
+    let cfg = null;
+    try {
+      cfg = JSON.parse(hub.split(hubMarker)[1].split("</script>")[0]);
+    } catch (err) {
+      problems.push("справочник кодов табеля — не корректный JSON: " + err.message);
+    }
+    if (cfg) {
+      const day = cfg["полный_рабочий_день_часов"];
+      if (typeof day !== "number" || !(day > 0 && day <= 24)) {
+        problems.push("полный_рабочий_день_часов должен быть числом от 1 до 24, сейчас " + JSON.stringify(day));
+      }
+      const codes = cfg["коды"];
+      if (!codes || typeof codes !== "object") problems.push("в справочнике нет раздела «коды»");
+      else {
+        Object.keys(codes).forEach((k) => {
+          const c = codes[k];
+          if (typeof c["название"] !== "string" || !c["название"]) {
+            problems.push("у кода «" + k + "» нет названия");
+          }
+          ["списочная", "срсч"].forEach((flag) => {
+            if (typeof c[flag] !== "boolean") {
+              problems.push("у кода «" + k + "» флаг «" + flag + "» должен быть true или false, сейчас "
+                + JSON.stringify(c[flag]) + " (кавычки вокруг true не нужны)");
+            }
+          });
+        });
+        if (!Object.keys(codes).length) problems.push("справочник кодов табеля пуст");
+      }
+    }
+  }
+
+  // Тест вытаскивает ядро расчёта из buh_hub.html по этим меткам.
+  ["const CP1251_HIGH =", "ЯДРО: конец.", "function parseTabel(", "function computeHeadcount(",
+   "function classifyEmployees(", "function classifyDay("]
+    .forEach((m) => {
+      if (!hub.includes(m)) problems.push("в buh_hub.html пропала метка «" + m + "», от неё зависит test-headcount.js");
+    });
+}
+
 if (problems.length) {
   console.log("НАСТРОЙКИ СЛОМАНЫ:");
   problems.forEach((p) => console.log("  - " + p));
