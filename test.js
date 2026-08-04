@@ -1,6 +1,6 @@
 // Проверка ядра расчёта: код берётся из index.html как есть (без копипасты).
 const fs = require("fs");
-const html = fs.readFileSync("c:/Calculator ZP/index.html", "utf8");
+const html = fs.readFileSync(require("path").join(__dirname, "index.html"), "utf8");
 
 const cfg = html.split('id="rates-config">')[1].split("</script>")[0];
 const core = html.slice(html.indexOf("const rub ="), html.indexOf("/* ----------------------------- Утилиты"));

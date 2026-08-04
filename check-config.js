@@ -104,6 +104,14 @@ if (fs.existsSync(hubPath)) {
     });
 }
 
+// Абсолютные пути с машины разработчика: локально работают, на GitHub — нет.
+// Один такой путь в test.js уже держал проверки красными; больше не повторяем.
+fs.readdirSync(__dirname).filter((f) => f.endsWith(".js")).forEach((f) => {
+  const src = fs.readFileSync(__dirname + "/" + f, "utf8");
+  const m = src.match(/["'][a-zA-Z]:[/\\][^"']*["']/);
+  if (m) problems.push("в " + f + " абсолютный путь " + m[0] + " — на другой машине его нет, используйте __dirname");
+});
+
 if (problems.length) {
   console.log("НАСТРОЙКИ СЛОМАНЫ:");
   problems.forEach((p) => console.log("  - " + p));
