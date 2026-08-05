@@ -84,7 +84,7 @@ if (fs.existsSync(hubPath)) {
           if (typeof c["название"] !== "string" || !c["название"]) {
             problems.push("у кода «" + k + "» нет названия");
           }
-          ["списочная", "срсч"].forEach((flag) => {
+          ["списочная", "срсч", "средняя"].forEach((flag) => {
             if (typeof c[flag] !== "boolean") {
               problems.push("у кода «" + k + "» флаг «" + flag + "» должен быть true или false, сейчас "
                 + JSON.stringify(c[flag]) + " (кавычки вокруг true не нужны)");
@@ -98,7 +98,8 @@ if (fs.existsSync(hubPath)) {
 
   // Тест вытаскивает ядро расчёта из buh_hub.html по этим меткам.
   ["const CP1251_HIGH =", "ЯДРО: конец.", "function parseTabel(", "function computeHeadcount(",
-   "function classifyEmployees(", "function classifyDay("]
+   "function classifyEmployees(", "function classifyDay(", "function readSpreadsheet(",
+   "function inflateRaw(", "function round1("]
     .forEach((m) => {
       if (!hub.includes(m)) problems.push("в buh_hub.html пропала метка «" + m + "», от неё зависит test-headcount.js");
     });

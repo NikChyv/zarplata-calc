@@ -16,7 +16,7 @@ const endMark = html.indexOf("ЯДРО: конец.");
 const core = html.slice(html.indexOf("const CP1251_HIGH ="), html.lastIndexOf("/*", endMark));
 const M = new Function(core + `
   return { cp1251, readOleStream, readBiffCells, parseTabel, classifyDay, snapRate, round1,
-           classifyEmployees, computeHeadcount, parseFooterNumbers };`)();
+           classifyEmployees, computeHeadcount, parseFooterNumbers, readSpreadsheet, readXlsxCells, inflateRaw, readZip };`)();
 
 const CONFIG = JSON.parse(html.split('id="codes-config">')[1].split("</script>")[0]);
 
@@ -34,8 +34,11 @@ const CASES = [
   {
     files: ["Табель.xls", "Табель-пример.xls"],
     title: "швейное производство: декретчица, внешний совместитель, директор на 0,5 ставки",
+    // Средняя 5,4, а не 6,4: декретчица есть в списочной, но в среднюю не входит.
+    // По этому табелю расчёта бухгалтера нет, число получено по правилам, проверенным
+    // на трёх других клиентах.
     employees: 8, persons: 7, calDays: 31, workDays: 22, period: "Июль 2026",
-    spisochnaya: "6.3", srsch: "4.8", sovm: "0.1", total: "6.4", row56: "0.5", row57: "4.3",
+    spisochnaya: "6.3", srsch: "4.8", sovm: "0.1", total: "5.4", row56: "0.5", row57: "4.3",
     checks: (e, eq) => {
       eq("№6 (весь месяц ОЖ) ВХОДИТ в списочную", e(5).daysInList, 31);
       eq("№6 не входит в среднесписочную", e(5).daysInSrsch, 0);
@@ -79,6 +82,41 @@ const CASES = [
       eq("но в списочной эти дни есть", e(4).daysInList, 31);
       eq("15 дней за свой счёт не идут в СрСЧ", e(13).daysInSrsch, 16);
       eq("и в списочной они есть", e(13).daysInList, 31);
+    }
+  },
+  {
+    files: ["Табель Мудрый зуб.xls", "Табель-пример-4.xls"],
+    title: "стоматология: три длины рабочей недели в одном табеле, декретчица, больничные",
+    employees: 15, persons: 12, calDays: 31, workDays: 22, period: "Июль 2026",
+    spisochnaya: "12.0", srsch: "9.3", sovm: "0.5", total: "11.5", row56: "1.0", row57: "8.3",
+    checks: (e, eq) => {
+      // 168,4 ч — целая ставка медсестры (38,5-часовая неделя), а не 0,96 от нормы администратора.
+      // 144,2 ч — целая ставка врача-стоматолога (33-часовая неделя).
+      eq("168,4 ч — это целая ставка", e(0).rate, 1);
+      eq("144,2 ч — это тоже целая ставка", e(3).rate, 1);
+      eq("87,5 ч — половина от 175", e(5).rate, 0.5);
+      eq("42,1 ч — четверть", e(2).rate, 0.25);
+      // Декретчица: в списочной есть, в среднесписочной и в средней нет
+      eq("декретчица в списочной", e(1).daysInList, 31);
+      eq("декретчица не в СрСЧ", e(1).daysInSrsch, 0);
+      eq("декретчица не в средней", e(1).daysInAvg, 0);
+      // Больничный: не в СрСЧ, но в средней остаётся
+      eq("больничный не идёт в СрСЧ", e(0).daysInSrsch, 29);
+      eq("но в среднюю больничный идёт", e(0).daysInAvg, 31);
+      eq("совместитель с 28 днями больничного", e(4).daysInSrsch, 3);
+    }
+  },
+  {
+    files: ["табель Ветмаинд.xlsx", "Табель-пример-5.xlsx"],
+    title: "ветклиника, формат .xlsx и другая форма табеля: нет графы «Часовая норма», есть код П",
+    employees: 5, persons: 5, calDays: 31, workDays: 22, period: "Июль 2026",
+    spisochnaya: "5.0", srsch: "4.1", sovm: "0.0", total: "5.0", row56: "1.0", row57: "3.1",
+    checks: (e, eq) => {
+      eq("норма взята из группы «Время по норме»", e(0).normHours, 175);
+      eq("все на целую ставку", e(0).rate, 1);
+      eq("28 дней больничного не идут в СрСЧ", e(1).daysInSrsch, 3);
+      eq("но в среднюю численность идут", e(1).daysInAvg, 31);
+      eq("праздничный день считается как рабочий", e(2).daysInSrsch, 31);
     }
   }
 ];
@@ -124,8 +162,8 @@ CASES.forEach((c) => {
     console.log("\n================ " + name + " ================");
     console.log(c.title);
 
-    const sheet = M.readBiffCells(M.readOleStream(new Uint8Array(fs.readFileSync(file))));
-    console.log("формат: " + (sheet.biff8 ? "BIFF8 (пересохранён в Excel)" : "BIFF5 (как отдаёт 1С)"));
+    const sheet = M.readSpreadsheet(new Uint8Array(fs.readFileSync(file)));
+    console.log("формат: " + (sheet.xlsx ? ".xlsx (zip + XML)" : sheet.biff8 ? "BIFF8 (пересохранён в Excel)" : "BIFF5 (как отдаёт 1С)"));
     const tab = M.parseTabel(sheet);
 
     console.log("\n--- 1. Чтение шапки ---");
