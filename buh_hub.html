@@ -113,6 +113,20 @@
   .card table th { color: var(--text-muted); font-weight: 500; font-size: 12px; text-transform: uppercase; }
   .card table td.num, .card table th.num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
 
+  /* Таблица не должна вылезать за карточку: если столбцов много, она прокручивается. */
+  .table-wrap { overflow-x: auto; }
+
+  /* Расшифровка — самая широкая таблица на странице: 7–8 столбцов, в каждом числовом
+     ещё и формула. Формулам разрешено переноситься, иначе они распирают таблицу
+     и выталкивают её за край карточки. */
+  #breakdown-table { font-size: 13px; }
+  #breakdown-table th, #breakdown-table td { padding: 8px 8px; vertical-align: top; }
+  #breakdown-table .fio { min-width: 130px; }
+  #breakdown-table .days { color: var(--text-muted); font-size: 12px; min-width: 96px; }
+  #breakdown-table .how { color: var(--text-muted); font-size: 11px; font-weight: 400;
+    white-space: normal; margin-top: 2px; text-transform: none; letter-spacing: 0; }
+  #breakdown-table th.num, #breakdown-table td.num { min-width: 104px; }
+
   .badge {
     display: inline-block; background: var(--warn-bg); color: var(--warn-ink);
     font-size: 12px; padding: 2px 8px; border-radius: 4px; margin-left: 6px;
@@ -265,7 +279,7 @@
 
         <div class="card">
           <h2>Расшифровка <span class="sub">из чего сложился каждый показатель, по каждому сотруднику</span></h2>
-          <table id="breakdown-table"></table>
+          <div class="table-wrap"><table id="breakdown-table"></table></div>
         </div>
 
         <div class="card" id="crosscheck-card">
@@ -927,6 +941,10 @@ function computeHeadcount(tab, marked, config, opts) {
   const directorIdx = opts.directorIdx;
 
   const r1 = round1;
+  // Формулы в расшифровке пишутся коротко: общий знаменатель (календарные дни)
+  // вынесен в шапку таблицы, иначе «÷ 31 кал. дн.» повторяется в каждой ячейке
+  // и распирает таблицу.
+  const nr = (x) => String(Math.round(x * 1000) / 1000).replace(".", ",");
   const rateOf = (e) => {
     if (byLaw[e.idx]) return 1;                                 // неполное время по закону — целой единицей
     const o = rateOverride[e.idx];
@@ -948,7 +966,7 @@ function computeHeadcount(tab, marked, config, opts) {
       rows.push({ idx: e.idx, fio: e.fio, role: "внешний совместитель", rate: st,
                   list: 0, listHow: "не входит",
                   srsch: 0, srschHow: "не входит",
-                  sovm: v, sovmHow: "ставка " + st + " × " + e.daysInSrsch + " дн. ÷ " + calDays + " кал. дн." });
+                  sovm: v, sovmHow: nr(st) + " × " + e.daysInSrsch + " дн." });
       return;
     }
     // Человек попадает в показатели один раз, даже если у него две должности
@@ -966,13 +984,13 @@ function computeHeadcount(tab, marked, config, opts) {
           : byLaw[e.idx] ? "неполное время по закону"
           : e.isPartTime ? "неполное время" : "основной работник",
       list: e.isInner ? 0 : e.daysInList / calDays,
-      listHow: e.isInner ? "не удваивает человека" : e.daysInList + " дн. ÷ " + calDays + " кал. дн.",
+      listHow: e.isInner ? "не удваивает человека" : e.daysInList + " дн.",
       srsch: v,
-      srschHow: v === 0 ? "не входит" : "ставка " + st + " × " + e.daysInSrsch + " дн. ÷ " + calDays + " кал. дн.",
+      srschHow: v === 0 ? "не входит" : nr(st) + " × " + e.daysInSrsch + " дн.",
       avg: e.isInner ? 0 : e.daysInAvg / calDays,
       avgHow: e.isInner ? "не удваивает человека"
             : e.daysInAvg === 0 ? "не входит"
-            : "1 человек × " + e.daysInAvg + " дн. ÷ " + calDays + " кал. дн.",
+            : e.daysInAvg + " дн.",
       sovm: 0, sovmHow: "—"
     });
   });
@@ -1253,9 +1271,17 @@ function renderResult() {
    сотрудник в каждый показатель. Суммы столбцов должны сходиться с итогами выше. */
 function renderBreakdown(r) {
   const n3 = (x) => x.toFixed(3).replace(".", ",");
+  // Столбец совместителей показывается, только если они в табеле есть: иначе это
+  // колонка из одних прочерков, которая зря отнимает ширину у остальных.
+  const hasSovm = r.rows.some((x) => x.sovm > 0);
+  const cal = r.raw.calDays;
+  // Знаменатель у всех один и тот же — он в шапке, а не в каждой ячейке.
+  const numHead = (title, formula) =>
+    '<th class="num">' + title + '<div class="how">' + formula + ' ÷ ' + cal + ' кал. дн.</div></th>';
   let h = '<tr><th>ФИО</th><th>Как учитывается</th><th class="num">Ставка</th><th>Дни по кодам</th>' +
-          '<th class="num">В списочную</th><th class="num">В СрСЧ</th>' +
-          '<th class="num">В среднюю</th><th class="num">В совместителей</th></tr>';
+          numHead("В списочную", "дни") + numHead("В СрСЧ", "ставка × дни") +
+          numHead("В среднюю", "1 чел. × дни") +
+          (hasSovm ? numHead("В совместителей", "ставка × дни") : '') + '</tr>';
 
   r.rows.forEach((row) => {
     const e = MARKED.employees[row.idx];
@@ -1267,28 +1293,26 @@ function renderBreakdown(r) {
     });
     const days = Object.keys(counts).map((k) => k + " " + counts[k]).join(" · ");
     const cell = (v, how) => '<td class="num">' + (v ? '<b>' + n3(v) + '</b>' : "—") +
-      '<div style="color:var(--text-muted);font-size:11.5px;font-weight:400">' + how + '</div></td>';
+      '<div class="how">' + how + '</div></td>';
 
-    h += '<tr><td>' + e.fio + '</td>' +
+    h += '<tr><td class="fio">' + e.fio + '</td>' +
          '<td style="color:var(--text-muted)">' + row.role + '</td>' +
          '<td class="num">' + String(Math.round(row.rate * 1000) / 1000).replace(".", ",") + '</td>' +
-         '<td style="color:var(--text-muted);font-size:12.5px">' + days +
-         (e.workedHours ? ' · всего ' + e.workedHours + ' ч' : '') + '</td>' +
+         '<td class="days">' + days +
+         (e.workedHours ? ' · всего ' + String(e.workedHours).replace(".", ",") + ' ч' : '') + '</td>' +
          cell(row.list, row.listHow) + cell(row.srsch, row.srschHow) +
-         cell(row.avg || 0, row.avgHow || "—") + cell(row.sovm, row.sovmHow) + '</tr>';
+         cell(row.avg || 0, row.avgHow || "—") +
+         (hasSovm ? cell(row.sovm, row.sovmHow) : '') + '</tr>';
   });
 
   const sum = (k) => r.rows.reduce((s, x) => s + (x[k] || 0), 0);
-  h += '<tr style="font-weight:600"><td colspan="4">Итого до округления</td>' +
-       '<td class="num">' + n3(sum("list")) + '</td>' +
-       '<td class="num">' + n3(sum("srsch")) + '</td>' +
-       '<td class="num">' + n3(sum("avg")) + '</td>' +
-       '<td class="num">' + n3(sum("sovm")) + '</td></tr>';
-  h += '<tr style="font-weight:600"><td colspan="4">После округления до одного знака</td>' +
-       '<td class="num">' + fmt1(r.spisochnaya) + '</td>' +
-       '<td class="num">' + fmt1(r.srsch) + '</td>' +
-       '<td class="num">' + fmt1(r.osnovnye) + '</td>' +
-       '<td class="num">' + fmt1(r.sovmestiteli) + '</td></tr>';
+  const totals = (label, list, srsch, avg, sovm) =>
+    '<tr style="font-weight:600"><td colspan="4">' + label + '</td>' +
+    '<td class="num">' + list + '</td><td class="num">' + srsch + '</td><td class="num">' + avg + '</td>' +
+    (hasSovm ? '<td class="num">' + sovm + '</td>' : '') + '</tr>';
+  h += totals("Итого до округления", n3(sum("list")), n3(sum("srsch")), n3(sum("avg")), n3(sum("sovm")));
+  h += totals("После округления до одного знака",
+              fmt1(r.spisochnaya), fmt1(r.srsch), fmt1(r.osnovnye), fmt1(r.sovmestiteli));
   $("breakdown-table").innerHTML = h;
 }
 
