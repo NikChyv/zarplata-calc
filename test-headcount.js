@@ -37,10 +37,16 @@ eq("пустая ячейка = не в списке", M.classifyDay("", CONFIG)
 eq("В — в списочной", M.classifyDay("В", CONFIG).list, true);
 eq("В — в СрСЧ", M.classifyDay("В", CONFIG).srsch, true);
 eq("О — в списочной", M.classifyDay("О", CONFIG).list, true);
-eq("ОЖ — НЕ в списочной", M.classifyDay("ОЖ", CONFIG).list, false);
-eq("ОЖ — НЕ в СрСЧ", M.classifyDay("ОЖ", CONFIG).srsch, false);
-eq("неизвестный код не угадывается", M.classifyDay("Б", CONFIG).kind, "unknown");
-eq("неизвестный код сохраняется для предупреждения", M.classifyDay("Б", CONFIG).code, "Б");
+// Декретчики входят в списочную, но не в среднесписочную — правило заказчика от 05.08.2026.
+// Инструкция в разделе 1 говорит обратное; следуем заказчику, не документу.
+eq("ОЖ (декрет) — В списочной", M.classifyDay("ОЖ", CONFIG).list, true);
+eq("ОЖ (декрет) — НЕ в СрСЧ", M.classifyDay("ОЖ", CONFIG).srsch, false);
+eq("Б (больничный) — в списочной", M.classifyDay("Б", CONFIG).list, true);
+eq("Б (больничный) — НЕ в СрСЧ", M.classifyDay("Б", CONFIG).srsch, false);
+eq("А (за свой счёт) — в списочной", M.classifyDay("А", CONFIG).list, true);
+eq("А (за свой счёт) — НЕ в СрСЧ", M.classifyDay("А", CONFIG).srsch, false);
+eq("неизвестный код не угадывается", M.classifyDay("Щ", CONFIG).kind, "unknown");
+eq("неизвестный код сохраняется для предупреждения", M.classifyDay("Щ", CONFIG).code, "Щ");
 
 /* ---------------- Проверки на файлах ---------------- */
 const files = ["Табель.xls", "Табель-пример.xls"]
@@ -80,7 +86,7 @@ files.forEach((file) => {
   eq("№1 — полное время", e(0).isPartTime, false);
   eq("№1 — 31 день в списке", e(0).daysInList, 31);
   eq("№2 уволена внутри месяца: 9 дней в списке", e(1).daysInList, 9);
-  eq("№6 (весь месяц ОЖ) исключена из списочной", e(5).daysInList, 0);
+  eq("№6 (весь месяц ОЖ) ВХОДИТ в списочную", e(5).daysInList, 31);
   eq("№6 исключена из СрСЧ", e(5).daysInSrsch, 0);
   eq("№7 — внешний совместитель", e(6).isSovmestitel, true);
   eq("№8 — неполное время", e(7).isPartTime, true);
@@ -91,7 +97,7 @@ files.forEach((file) => {
   console.log("\n--- 3. Показатели (разделы 2–6 и строки 56/57) ---");
   const dirIdx = marked.employees.findIndex((x) => /^директор$/i.test(x.post));
   const r = M.computeHeadcount(tab, marked, CONFIG, { byLaw: {}, gph: [], directorIdx: dirIdx });
-  eq("Списочная в среднем за месяц (164 чел.-дня / 31)", f1(r.spisochnaya), "5.3");
+  eq("Списочная в среднем за месяц (195 чел.-дней / 31)", f1(r.spisochnaya), "6.3");
   eq("Среднесписочная (4,290 целыми + 0,497 пропорц.)", f1(r.srsch), "4.8");
   eq("Средняя численность совместителей (12 ч / 8 / 22)", f1(r.sovmestiteli), "0.1");
   eq("Средняя численность по ГПД (данных нет)", f1(r.gph), "0.0");
@@ -123,14 +129,20 @@ files.forEach((file) => {
   if (!rounded) fails++;
   console.log((rounded ? "  OK  " : " FAIL ") + "все семь показателей округлены до одного знака");
 
-  console.log("\n--- 7. Сверка с подвалом табеля ---");
+  console.log("\n--- 7. Расшифровка сходится с итогами ---");
+  const sum = (k) => r.rows.reduce((s, x) => s + x[k], 0);
+  eq("сумма вкладов в списочную = показатель", f1(sum("list")), f1(r.spisochnaya));
+  eq("сумма вкладов в СрСЧ = показатель", f1(sum("srsch")), f1(r.srsch));
+  eq("сумма вкладов в совместителей = показатель", f1(sum("sovm")), f1(r.sovmestiteli));
+  eq("расшифровка есть по каждому сотруднику", r.rows.length, tab.employees.length);
+
+  console.log("\n--- 8. Сверка с подвалом табеля ---");
   const foot = M.parseFooterNumbers(tab.footer);
   eq("прочитана списочная из подвала", foot.spisochnaya, 6.3);
   eq("прочитана среднесписочная из подвала", foot.srsch, 5);
   eq("прочитана средняя из подвала", foot.total, 6);
-  console.log("       со списочной: " + f1(r.spisochnaya - foot.spisochnaya) +
-              " — 1С включает декрет, инструкция исключает");
-  console.log("       со средней:   " + f1(r.total - foot.total) +
+  eq("списочная теперь совпадает с 1С", f1(r.spisochnaya), f1(foot.spisochnaya));
+  console.log("       со средней: " + f1(r.total - foot.total) +
               " — 1С считает совместителя и неполное время целыми единицами");
 });
 
