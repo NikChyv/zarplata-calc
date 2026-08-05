@@ -232,6 +232,7 @@
         <div class="card">
           <h2>Сотрудники и категории <span class="sub">отметьте тех, у кого неполное время установлено по закону</span></h2>
           <table id="emp-table"></table>
+          <div class="note" id="rate-note" style="background:#f7f8fa;border:1px solid var(--border);color:var(--text-muted);margin:14px 0 0"></div>
           <div class="note warn" style="margin:14px 0 0">
             Неполное рабочее время <b>по соглашению с нанимателем</b> учитывается в среднесписочной численности
             пропорционально отработанному времени, а <b>по закону</b> (беременные, родитель ребёнка до 14 лет,
@@ -562,6 +563,23 @@ function classifyDay(text, config) {
   return { kind: "code", code: t, list: !!c["списочная"], srsch: !!c["срсч"] };
 }
 
+/* ---- Ставка сотрудника ----
+   В табеле есть только «Часовая норма» — она уже умножена на ставку. Полная норма
+   в одном табеле бывает разной: у медиков сокращённая неделя (168,4 ч в июле 2026),
+   у администрации обычная (175 ч). Поэтому норму делим на максимальную в табеле
+   и подтягиваем к ближайшей «круглой» доле — 0,241 превращается в 0,25.
+   Результат показывается в интерфейсе и правится руками: угадывать ставку молча нельзя. */
+const NICE_RATES = [0.05, 0.1, 0.125, 0.15, 0.2, 0.25, 1 / 3, 0.375, 0.4, 0.5,
+                    0.6, 0.625, 2 / 3, 0.75, 0.8, 0.875, 1];
+function snapRate(x) {
+  let best = x, dist = Infinity;
+  NICE_RATES.forEach((n) => {
+    const d = Math.abs(n - x);
+    if (d < dist && d <= 0.03) { dist = d; best = n; }
+  });
+  return best;
+}
+
 /* ---- Разметка сотрудников: кто как учитывается ---- */
 function classifyEmployees(tab, config) {
   const fullNorm = Math.max.apply(null, tab.employees.map((e) => e.normHours || 0));
@@ -579,13 +597,17 @@ function classifyEmployees(tab, config) {
       }
       return s;
     });
-    const isSovmestitel = /\(\s*совместител/i.test(e.post);
-    const isPartTime = fullNorm > 0 && e.normHours > 0 && e.normHours < fullNorm;
+    // Внутренний совместитель — вторая должность того же человека, а не второй человек.
+    // Проверяется раньше внешнего: «(Внутренний совместитель)» не должен попасть во внешние.
+    const isInner = /внутренн[а-яё]*\s+совместител/i.test(e.post);
+    const isSovmestitel = !isInner && /совместител/i.test(e.post);
+    const rateRaw = fullNorm > 0 ? e.normHours / fullNorm : 1;
     return {
       idx: idx, fio: e.fio, post: e.post,
       normHours: e.normHours, workedHours: e.workedHours,
-      rate: fullNorm > 0 ? e.normHours / fullNorm : 1,
-      isSovmestitel: isSovmestitel, isPartTime: isPartTime,
+      rateRaw: rateRaw, rate: snapRate(rateRaw),
+      isSovmestitel: isSovmestitel, isInner: isInner,
+      isPartTime: fullNorm > 0 && e.normHours > 0 && e.normHours < fullNorm,
       daysInList: daysInList, daysInSrsch: daysInSrsch, hoursSrsch: hoursSrsch,
       unknownDays: unknownDays, statuses: statuses
     };
@@ -593,49 +615,71 @@ function classifyEmployees(tab, config) {
   return { employees: list, fullNorm: fullNorm, unknownCodes: unknown };
 }
 
-/* ---- Расчёт показателей (разделы 2–6 и строки 56/57) ---- */
+/* ---- Расчёт показателей ----
+   Три показателя считаются ПО-РАЗНОМУ, и это главное, что нужно помнить:
+
+     Списочная      — ЛЮДИ, целыми единицами. Внутренний совместитель — один человек,
+                      а не два. Внешние совместители не входят. Декретчики входят.
+     Среднесписочная — СТАВКИ, а не люди и не отработанные часы. Обе должности
+                      внутреннего совместителя складываются. Декретчики не входят.
+     Средняя        — списочная (людьми) + внешние совместители по ставке + ГПД.
+
+   Проверено на табеле ООО «ЛилиДент» за июль 2026: 4 / 2,5 / 4,8 — сходится с расчётом
+   бухгалтера. Считать среднесписочную по фактически отработанным часам НЕЛЬЗЯ:
+   директор в отпуске отработал 71 ч из 175, но считается как целая ставка. */
 function computeHeadcount(tab, marked, config, opts) {
-  const FULL_DAY = config["полный_рабочий_день_часов"];
-  const calDays = tab.calDays, workDays = tab.workDays;
+  const calDays = tab.calDays;
   opts = opts || {};
   const byLaw = opts.byLaw || {};              // idx -> true: неполное время по закону, считать целой единицей
+  const rateOverride = opts.rates || {};       // idx -> ставка, поправленная бухгалтером
   const gphContracts = opts.gph || [];         // [{from, to}] — числа месяца
   const directorIdx = opts.directorIdx;
 
   const r1 = (x) => Math.round(x * 10) / 10;
-  const proportional = (e) => (e.hoursSrsch / FULL_DAY) / workDays;
+  const rateOf = (e) => {
+    if (byLaw[e.idx]) return 1;                                 // неполное время по закону — целой единицей
+    const o = rateOverride[e.idx];
+    return (typeof o === "number" && isFinite(o) && o > 0) ? o : e.rate;
+  };
+  const dirFio = directorIdx >= 0 && marked.employees[directorIdx] ? marked.employees[directorIdx].fio : null;
 
-  let spisochnayaDays = 0, srschWhole = 0, srschProp = 0, sovm = 0;
-  let dirWhole = 0, dirProp = 0;
-  const rows = [];                                              // расшифровка: вклад каждого сотрудника
+  let srsch = 0, sovm = 0, dirSrsch = 0;
+  const persons = {};                                           // ФИО -> дней в списочной (человек, не ставка)
+  const rows = [];                                              // расшифровка: вклад каждой строки табеля
 
   marked.employees.forEach((e) => {
-    const prop = proportional(e);
-    if (e.isSovmestitel) {                                      // разд. 4, в списочную и СрСЧ не входят
-      sovm += prop;
-      rows.push({ idx: e.idx, fio: e.fio, role: "внешний совместитель",
+    const st = rateOf(e);
+    if (e.isSovmestitel) {                                      // внешние: отдельный показатель, по ставке
+      const v = st * e.daysInList / calDays;
+      sovm += v;
+      rows.push({ idx: e.idx, fio: e.fio, role: "внешний совместитель", rate: st,
                   list: 0, listHow: "не входит",
                   srsch: 0, srschHow: "не входит",
-                  sovm: prop, sovmHow: e.hoursSrsch + " ч ÷ " + FULL_DAY + " ÷ " + workDays + " раб. дн." });
+                  sovm: v, sovmHow: "ставка " + st + " × " + e.daysInList + " дн. ÷ " + calDays + " кал. дн." });
       return;
     }
-    spisochnayaDays += e.daysInList;                            // разд. 2: неполные — целой единицей
-    const asWhole = !e.isPartTime || byLaw[e.idx];              // разд. 3
-    const whole = e.daysInSrsch / calDays;
-    if (asWhole) srschWhole += whole; else srschProp += prop;
-    if (e.idx === directorIdx) { if (asWhole) dirWhole += whole; else dirProp += prop; }
+    // Человек в списочную попадает один раз, даже если у него две должности
+    persons[e.fio] = Math.max(persons[e.fio] || 0, e.daysInList);
+
+    const v = st * e.daysInSrsch / calDays;
+    srsch += v;
+    if (dirFio && e.fio === dirFio) dirSrsch += v;
+
     rows.push({
-      idx: e.idx, fio: e.fio,
-      role: e.isPartTime ? (byLaw[e.idx] ? "неполное время по закону" : "неполное время") : "основной работник",
-      list: e.daysInList / calDays,
-      listHow: e.daysInList + " дн. ÷ " + calDays + " кал. дн.",
-      srsch: asWhole ? whole : prop,
-      srschHow: e.daysInSrsch === 0 && asWhole ? "не входит"
-              : asWhole ? e.daysInSrsch + " дн. ÷ " + calDays + " кал. дн."
-                        : e.hoursSrsch + " ч ÷ " + FULL_DAY + " ÷ " + workDays + " раб. дн.",
+      idx: e.idx, fio: e.fio, rate: st,
+      role: e.isInner ? "внутренний совместитель — вторая должность"
+          : byLaw[e.idx] ? "неполное время по закону"
+          : e.isPartTime ? "неполное время" : "основной работник",
+      list: e.isInner ? 0 : e.daysInList / calDays,
+      listHow: e.isInner ? "не удваивает человека" : e.daysInList + " дн. ÷ " + calDays + " кал. дн.",
+      srsch: v,
+      srschHow: v === 0 ? "не входит" : "ставка " + st + " × " + e.daysInSrsch + " дн. ÷ " + calDays + " кал. дн.",
       sovm: 0, sovmHow: "—"
     });
   });
+
+  let spisochnayaDays = 0;
+  Object.keys(persons).forEach((fio) => { spisochnayaDays += persons[fio]; });
 
   let gphDays = 0;
   gphContracts.forEach((g) => {
@@ -645,24 +689,22 @@ function computeHeadcount(tab, marked, config, opts) {
   });
 
   const spisochnaya = spisochnayaDays / calDays;
-  const srsch = srschWhole + srschProp;
-  const sovmAvg = sovm;
   const gph = gphDays / calDays;
-  const director = dirWhole + dirProp;
 
   return {
     spisochnaya: r1(spisochnaya),
     srsch: r1(srsch),
-    sovmestiteli: r1(sovmAvg),
+    sovmestiteli: r1(sovm),
     gph: r1(gph),
-    // раздел 6: складываются уже округлённые составляющие, как в примере инструкции
-    total: r1(r1(srsch) + r1(sovmAvg) + r1(gph)),
-    row56: r1(director),
-    row57: r1(srsch - director),
+    // Средняя численность: люди из списочной + внешние совместители по ставке + ГПД.
+    // Складываются уже округлённые составляющие, как в примере инструкции.
+    total: r1(r1(spisochnaya) + r1(sovm) + r1(gph)),
+    row56: r1(dirSrsch),
+    row57: r1(srsch - dirSrsch),
     rows: rows,
-    raw: { spisochnayaDays: spisochnayaDays, srschWhole: srschWhole, srschProp: srschProp,
-           spisochnayaExact: spisochnaya, srschExact: srsch, sovmExact: sovmAvg,
-           gphDays: gphDays, calDays: calDays, workDays: workDays }
+    raw: { spisochnayaDays: spisochnayaDays, persons: Object.keys(persons).length,
+           spisochnayaExact: spisochnaya, srschExact: srsch, sovmExact: sovm,
+           gphDays: gphDays, calDays: calDays, workDays: tab.workDays }
   };
 }
 
@@ -695,7 +737,7 @@ const $ = (id) => document.getElementById(id);
 const fmt1 = (x) => x.toFixed(1).replace(".", ",");
 
 let TAB = null, MARKED = null;
-const STATE = { byLaw: {}, gph: [], directorIdx: -1 };
+const STATE = { byLaw: {}, gph: [], rates: {}, directorIdx: -1 };
 
 /* --- Загрузка файла --- */
 $("drop").addEventListener("click", () => $("file").click());
@@ -723,6 +765,7 @@ function loadBytes(bytes, fileName) {
       MARKED = classifyEmployees(TAB, CONFIG);
       STATE.byLaw = {};
       STATE.gph = [];
+      STATE.rates = {};
       const dir = MARKED.employees.findIndex((e) => /директор|руководител/i.test(e.post));
       STATE.directorIdx = dir;
       $("file-error").innerHTML = "";
@@ -788,24 +831,28 @@ function renderCodes() {
 
 function renderEmployees() {
   let h = '<tr><th>ФИО</th><th>Должность</th><th class="num">Норма ч</th><th class="num">Ставка</th>' +
-          '<th class="num">Дней в списке</th><th class="num">Часов</th><th>Как учитывается</th>' +
+          '<th class="num">Дней в списке</th><th>Как учитывается</th>' +
           '<th>Неполное<br>по закону</th></tr>';
+  let snapped = false;
   MARKED.employees.forEach((e) => {
-    let how, cls = "grey";
-    if (e.isSovmestitel) { how = "внешний совместитель — отдельно, пропорционально"; cls = "grey"; }
-    else if (e.daysInList === 0 && e.daysInSrsch === 0) { how = "исключён из обоих показателей"; cls = "grey"; }
-    else if (e.isPartTime && !STATE.byLaw[e.idx]) { how = "в СрСЧ пропорционально отработанному времени"; cls = "ok"; }
-    else if (e.isPartTime) { how = "неполное по закону — целой единицей"; cls = "ok"; }
-    else { how = "целой единицей"; cls = "ok"; }
+    let how, cls = "ok";
+    if (e.isSovmestitel) { how = "внешний совместитель — только в среднюю, по ставке"; cls = "grey"; }
+    else if (e.isInner) { how = "вторая должность того же человека — в списочной не удваивается"; cls = "grey"; }
+    else if (e.daysInSrsch === 0) { how = "в списочной есть, в среднесписочной нет"; cls = "grey"; }
+    else if (STATE.byLaw[e.idx]) { how = "неполное по закону — целой единицей"; cls = "ok"; }
+    else { how = "в среднесписочной по ставке"; cls = "ok"; }
+
+    const shown = STATE.rates[e.idx] !== undefined ? STATE.rates[e.idx] : e.rate;
+    if (Math.abs(e.rate - e.rateRaw) > 0.001) snapped = true;
 
     h += '<tr><td>' + e.fio + (e.unknownDays ? ' <span class="badge err">' + e.unknownDays + ' дн. с неизвестным кодом</span>' : '') +
          '</td><td>' + e.post + '</td>' +
          '<td class="num">' + (e.normHours || "—") + '</td>' +
-         '<td class="num">' + (e.rate ? e.rate.toFixed(2).replace(".", ",") : "—") + '</td>' +
+         '<td class="num"><input class="small" type="number" step="0.05" min="0" max="2" value="' +
+             (Math.round(shown * 1000) / 1000) + '" data-rate="' + e.idx + '"></td>' +
          '<td class="num">' + e.daysInList + '</td>' +
-         '<td class="num">' + e.workedHours + '</td>' +
          '<td><span class="badge ' + cls + '">' + how + '</span></td>' +
-         '<td>' + (e.isPartTime && !e.isSovmestitel
+         '<td>' + (!e.isSovmestitel
             ? '<input type="checkbox" data-bylaw="' + e.idx + '"' + (STATE.byLaw[e.idx] ? " checked" : "") + '>'
             : '') + '</td></tr>';
   });
@@ -816,6 +863,19 @@ function renderEmployees() {
       renderEmployees(); renderResult();
     });
   });
+  $("emp-table").querySelectorAll("[data-rate]").forEach((inp) => {
+    inp.addEventListener("input", () => {
+      const v = parseFloat(String(inp.value).replace(",", "."));
+      STATE.rates[+inp.dataset.rate] = isFinite(v) && v > 0 ? v : undefined;
+      renderResult();
+    });
+  });
+  $("rate-note").innerHTML = snapped
+    ? 'Ставка вычислена из графы «Часовая норма»: норма сотрудника делится на самую большую норму в табеле, ' +
+      'результат подтянут к ближайшей круглой доле. В одном табеле полная норма бывает разной — ' +
+      'у медиков сокращённая неделя, у администрации обычная, — поэтому <b>ставку стоит проверить и при ' +
+      'необходимости поправить прямо в таблице</b>.'
+    : 'Ставка вычислена из графы «Часовая норма». При необходимости поправьте прямо в таблице.';
 }
 
 function renderDirector() {
@@ -867,13 +927,15 @@ function renderResult() {
   let h = '<tr><th>Показатель</th><th class="num">Значение</th><th>Как посчитано</th></tr>';
   const row = (n, v, how) => '<tr><td>' + n + '</td><td class="num"><b>' + fmt1(v) + '</b></td><td style="color:var(--text-muted)">' + how + '</td></tr>';
   h += row("Списочная численность в среднем за месяц", r.spisochnaya,
-           r.raw.spisochnayaDays + " человеко-дней ÷ " + r.raw.calDays + " календарных дней");
+           "людей: " + r.raw.persons + " · " + r.raw.spisochnayaDays + " человеко-дней ÷ " +
+           r.raw.calDays + " кал. дней · целыми единицами, без внешних совместителей");
   h += row("Среднесписочная численность (СрСЧ)", r.srsch,
-           "целыми единицами " + r.raw.srschWhole.toFixed(3) + " + пропорционально " + r.raw.srschProp.toFixed(3));
-  h += row("Средняя численность внешних совместителей", r.sovmestiteli, "пропорционально отработанному времени");
+           "сумма ставок основных работников, без декретчиков · " + r.raw.srschExact.toFixed(3));
+  h += row("Средняя численность внешних совместителей", r.sovmestiteli, "по ставке · " + r.raw.sovmExact.toFixed(3));
   h += row("Средняя численность по ГПД", r.gph,
            r.raw.gphDays + " человеко-дней ÷ " + r.raw.calDays + " календарных дней");
-  h += row("Средняя численность в целом по организации", r.total, "СрСЧ + совместители + ГПД");
+  h += row("Средняя численность в целом по организации", r.total,
+           "списочная (людьми) + внешние совместители (по ставке) + ГПД");
   h += row("Строка 56 — СрСЧ руководителя", r.row56,
            STATE.directorIdx >= 0 ? MARKED.employees[STATE.directorIdx].fio : "руководитель не выбран");
   h += row("Строка 57 — СрСЧ без руководителя", r.row57, "СрСЧ минус строка 56");
@@ -887,7 +949,7 @@ function renderResult() {
    сотрудник в каждый показатель. Суммы столбцов должны сходиться с итогами выше. */
 function renderBreakdown(r) {
   const n3 = (x) => x.toFixed(3).replace(".", ",");
-  let h = '<tr><th>ФИО</th><th>Как учитывается</th><th>Дни по кодам</th>' +
+  let h = '<tr><th>ФИО</th><th>Как учитывается</th><th class="num">Ставка</th><th>Дни по кодам</th>' +
           '<th class="num">В списочную</th><th class="num">В СрСЧ</th><th class="num">В совместителей</th></tr>';
 
   r.rows.forEach((row) => {
@@ -904,17 +966,18 @@ function renderBreakdown(r) {
 
     h += '<tr><td>' + e.fio + '</td>' +
          '<td style="color:var(--text-muted)">' + row.role + '</td>' +
+         '<td class="num">' + String(Math.round(row.rate * 1000) / 1000).replace(".", ",") + '</td>' +
          '<td style="color:var(--text-muted);font-size:12.5px">' + days +
          (e.workedHours ? ' · всего ' + e.workedHours + ' ч' : '') + '</td>' +
          cell(row.list, row.listHow) + cell(row.srsch, row.srschHow) + cell(row.sovm, row.sovmHow) + '</tr>';
   });
 
   const sum = (k) => r.rows.reduce((s, x) => s + x[k], 0);
-  h += '<tr style="font-weight:600"><td colspan="3">Итого до округления</td>' +
+  h += '<tr style="font-weight:600"><td colspan="4">Итого до округления</td>' +
        '<td class="num">' + n3(sum("list")) + '</td>' +
        '<td class="num">' + n3(sum("srsch")) + '</td>' +
        '<td class="num">' + n3(sum("sovm")) + '</td></tr>';
-  h += '<tr style="font-weight:600"><td colspan="3">После округления до одного знака</td>' +
+  h += '<tr style="font-weight:600"><td colspan="4">После округления до одного знака</td>' +
        '<td class="num">' + fmt1(r.spisochnaya) + '</td>' +
        '<td class="num">' + fmt1(r.srsch) + '</td>' +
        '<td class="num">' + fmt1(r.sovmestiteli) + '</td></tr>';
@@ -951,9 +1014,9 @@ function renderCrosscheck(r) {
   h += '</table>';
   if (diff) {
     h += '<div class="note warn" style="margin:14px 0 0">Расхождение с 1С — ожидаемо. ' +
-      '1С считает сотрудников на неполном времени и совместителей целыми единицами и включает декрет в списочную численность. ' +
-      'Инструкция Белстата требует пропорционального учёта и исключения декрета. ' +
-      'Правильной считается сторона инструкции — но если бухгалтер решит иначе, расчёт надо менять.</div>';
+      '1С считает всех целыми единицами: не применяет ставки в среднесписочной и приписывает ' +
+      'внешним совместителям и внутреннему совместителю по целому человеку. ' +
+      'Этот расчёт сверен с расчётом бухгалтера вручную и расходится с 1С сознательно.</div>';
   }
   $("crosscheck").innerHTML = h;
 }

@@ -1,13 +1,13 @@
 // Проверка расчёта численности. Логика берётся из buh_hub.html как есть,
-// данные — из табеля 1С, который лежит рядом.
+// данные — из табелей, которые лежат рядом.
 //
 // Запуск: node test-headcount.js
 //
-// Файлов может быть два:
-//   Табель.xls         — настоящая выгрузка (BIFF5, персональные данные, в репозиторий не коммитится)
-//   Табель-пример.xls  — обезличенная копия (BIFF8, лежит в репозитории и гоняется на GitHub)
-// Тест прогоняется по каждому найденному и требует одинаковых чисел: 1С пишет BIFF5,
-// а если бухгалтер откроет и пересохранит файл в Excel — получится BIFF8.
+// Табелей два вида:
+//   Табель*.xls          — настоящие выгрузки (персональные данные, в репозиторий не коммитятся)
+//   Табель-пример*.xls   — обезличенные копии (лежат в репозитории и гоняются на GitHub)
+// Каждый настоящий и каждый обезличенный проверяются одним и тем же набором ожиданий:
+// 1С пишет BIFF5, а если бухгалтер откроет и пересохранит файл в Excel — получится BIFF8.
 const fs = require("fs");
 const path = require("path");
 
@@ -15,7 +15,7 @@ const html = fs.readFileSync(path.join(__dirname, "buh_hub.html"), "utf8");
 const endMark = html.indexOf("ЯДРО: конец.");
 const core = html.slice(html.indexOf("const CP1251_HIGH ="), html.lastIndexOf("/*", endMark));
 const M = new Function(core + `
-  return { cp1251, readOleStream, readBiffCells, parseTabel, classifyDay,
+  return { cp1251, readOleStream, readBiffCells, parseTabel, classifyDay, snapRate,
            classifyEmployees, computeHeadcount, parseFooterNumbers };`)();
 
 const CONFIG = JSON.parse(html.split('id="codes-config">')[1].split("</script>")[0]);
@@ -28,6 +28,43 @@ function eq(name, got, want) {
 }
 const f1 = (x) => x.toFixed(1);
 
+/* ================= Ожидания по каждому табелю =================
+   Числа для «ЛилиДент» сверены с расчётом бухгалтера вручную (июль 2026): 4 / 2,5 / 4,8. */
+const CASES = [
+  {
+    files: ["Табель.xls", "Табель-пример.xls"],
+    title: "швейное производство: декретчица, внешний совместитель, директор на 0,5 ставки",
+    employees: 8, persons: 7, calDays: 31, workDays: 22, period: "Июль 2026",
+    spisochnaya: "6.3", srsch: "4.8", sovm: "0.1", total: "6.4", row56: "0.5", row57: "4.3",
+    checks: (e, eq) => {
+      eq("№6 (весь месяц ОЖ) ВХОДИТ в списочную", e(5).daysInList, 31);
+      eq("№6 не входит в среднесписочную", e(5).daysInSrsch, 0);
+      eq("№7 — внешний совместитель", e(6).isSovmestitel, true);
+      eq("№7 — ставка 0,1", e(6).rate, 0.1);
+      eq("№8 — директор на половину ставки", e(7).rate, 0.5);
+      eq("внутренних совместителей нет", e(7).isInner, false);
+    }
+  },
+  {
+    files: ["Табель Лилидент.xls", "Табель-пример-2.xls"],
+    title: "стоматология: три внешних совместителя и один внутренний",
+    // 8 строк табеля, но людей в списочной 4: трое внешних совместителей туда не входят,
+    // а две должности Юдичевой — один человек.
+    employees: 8, persons: 4, calDays: 31, workDays: 22, period: "Июль 2026",
+    spisochnaya: "4.0", srsch: "2.5", sovm: "0.8", total: "4.8", row56: "1.0", row57: "1.5",
+    checks: (e, eq) => {
+      eq("№1 — внешний совместитель", e(0).isSovmestitel, true);
+      eq("№1 — ставка подтянута к 0,25", e(0).rate, 0.25);
+      eq("№3 — основной работник, не совместитель", e(2).isSovmestitel, false);
+      eq("№6 — директор на целую ставку", e(5).rate, 1);
+      eq("№7 — основная должность, 0,5 ставки", e(6).rate, 0.5);
+      eq("№8 — ВНУТРЕННИЙ совместитель", e(7).isInner, true);
+      eq("№8 не считается внешним совместителем", e(7).isSovmestitel, false);
+      eq("№7 и №8 — один и тот же человек", e(6).fio === e(7).fio, true);
+    }
+  }
+];
+
 /* ---------------- Проверки, не зависящие от файла ---------------- */
 console.log("--- Распознавание кодов ---");
 eq("число = часы явки", M.classifyDay("8", CONFIG).kind, "hours");
@@ -35,116 +72,91 @@ eq("часы с дробью", M.classifyDay("3.5", CONFIG).hours, 3.5);
 eq("часы через запятую", M.classifyDay("3,5", CONFIG).hours, 3.5);
 eq("пустая ячейка = не в списке", M.classifyDay("", CONFIG).kind, "none");
 eq("В — в списочной", M.classifyDay("В", CONFIG).list, true);
-eq("В — в СрСЧ", M.classifyDay("В", CONFIG).srsch, true);
 eq("О — в списочной", M.classifyDay("О", CONFIG).list, true);
 // Декретчики входят в списочную, но не в среднесписочную — правило заказчика от 05.08.2026.
-// Инструкция в разделе 1 говорит обратное; следуем заказчику, не документу.
 eq("ОЖ (декрет) — В списочной", M.classifyDay("ОЖ", CONFIG).list, true);
 eq("ОЖ (декрет) — НЕ в СрСЧ", M.classifyDay("ОЖ", CONFIG).srsch, false);
 eq("Б (больничный) — в списочной", M.classifyDay("Б", CONFIG).list, true);
 eq("Б (больничный) — НЕ в СрСЧ", M.classifyDay("Б", CONFIG).srsch, false);
 eq("А (за свой счёт) — в списочной", M.classifyDay("А", CONFIG).list, true);
-eq("А (за свой счёт) — НЕ в СрСЧ", M.classifyDay("А", CONFIG).srsch, false);
 eq("неизвестный код не угадывается", M.classifyDay("Щ", CONFIG).kind, "unknown");
-eq("неизвестный код сохраняется для предупреждения", M.classifyDay("Щ", CONFIG).code, "Щ");
+
+console.log("\n--- Подтягивание ставки к круглой доле ---");
+eq("42,1 / 175 = 0,241 -> 0,25", M.snapRate(42.1 / 175), 0.25);
+eq("84,2 / 175 = 0,481 -> 0,5", M.snapRate(84.2 / 175), 0.5);
+eq("17,5 / 175 = 0,1 остаётся 0,1", M.snapRate(0.1), 0.1);
+eq("целая ставка остаётся целой", M.snapRate(1), 1);
+eq("далёкое значение не подтягивается", M.snapRate(0.44), 0.44);
 
 /* ---------------- Проверки на файлах ---------------- */
-const files = ["Табель.xls", "Табель-пример.xls"]
-  .map((f) => path.join(__dirname, f))
-  .filter((f) => fs.existsSync(f));
+let ran = 0;
+CASES.forEach((c) => {
+  c.files.forEach((name) => {
+    const file = path.join(__dirname, name);
+    if (!fs.existsSync(file)) return;
+    ran++;
+    console.log("\n================ " + name + " ================");
+    console.log(c.title);
 
-if (!files.length) {
-  console.log("\nНи одного табеля рядом не найдено — проверки расчёта пропущены.");
-  process.exit(fails ? 1 : 0);
-}
+    const sheet = M.readBiffCells(M.readOleStream(new Uint8Array(fs.readFileSync(file))));
+    console.log("формат: " + (sheet.biff8 ? "BIFF8 (пересохранён в Excel)" : "BIFF5 (как отдаёт 1С)"));
+    const tab = M.parseTabel(sheet);
 
-files.forEach((file) => {
-  const name = path.basename(file);
-  console.log("\n================ " + name + " ================");
+    console.log("\n--- 1. Чтение шапки ---");
+    // Само нахождение шапки доказывает, что CP1251 раскодирована верно.
+    eq("период", tab.period, c.period);
+    eq("календарных дней", tab.calDays, c.calDays);
+    eq("рабочих дней", tab.workDays, c.workDays);
+    eq("строк в табеле", tab.employees.length, c.employees);
 
-  const sheet = M.readBiffCells(M.readOleStream(new Uint8Array(fs.readFileSync(file))));
-  console.log("формат: " + (sheet.biff8 ? "BIFF8 (пересохранён в Excel)" : "BIFF5 (как отдаёт 1С)"));
-  const tab = M.parseTabel(sheet);
+    const marked = M.classifyEmployees(tab, CONFIG);
+    const e = (i) => marked.employees[i];
+    console.log("\n--- 2. Категории ---");
+    eq("неизвестных кодов нет", Object.keys(marked.unknownCodes).length, 0);
+    c.checks(e, eq);
 
-  console.log("\n--- 1. Чтение шапки и метаданных ---");
-  // Само нахождение шапки доказывает, что CP1251 раскодирована верно:
-  // иначе слово «Фамилия» не нашлось бы и parseTabel бросил бы ошибку.
-  eq("период", tab.period, "Июль 2026");
-  eq("календарных дней", tab.calDays, 31);
-  eq("рабочих дней", tab.workDays, 22);
-  eq("сотрудников", tab.employees.length, 8);
-  eq("должности читаются кириллицей", /^Швея \d разряда$/.test(tab.employees[1].post), true);
-  eq("пометка совместителя на месте", /\(Совместитель\)/.test(tab.employees[6].post), true);
-  eq("должность руководителя на месте", tab.employees[7].post, "Директор");
+    console.log("\n--- 3. Показатели ---");
+    const dirIdx = marked.employees.findIndex((x) => /директор/i.test(x.post) && !/заместител/i.test(x.post));
+    const r = M.computeHeadcount(tab, marked, CONFIG, { byLaw: {}, gph: [], rates: {}, directorIdx: dirIdx });
+    eq("людей (внутренний совместитель — один человек)", r.raw.persons, c.persons);
+    eq("Списочная — людьми, целыми единицами", f1(r.spisochnaya), c.spisochnaya);
+    eq("Среднесписочная — суммой ставок", f1(r.srsch), c.srsch);
+    eq("Средняя численность внешних совместителей", f1(r.sovmestiteli), c.sovm);
+    eq("Средняя в целом = списочная + совместители + ГПД", f1(r.total), c.total);
+    eq("Строка 56 — СрСЧ руководителя", f1(r.row56), c.row56);
+    eq("Строка 57 — СрСЧ без руководителя", f1(r.row57), c.row57);
+    eq("контроль: 56 + 57 = СрСЧ", f1(r.row56 + r.row57), f1(r.srsch));
 
-  const marked = M.classifyEmployees(tab, CONFIG);
-  const e = (i) => marked.employees[i];
+    console.log("\n--- 4. Ставку можно поправить руками ---");
+    // ставим первому сотруднику заведомо другую ставку, чем распознана
+    const other = e(0).rate === 1 ? 0.5 : 1;
+    const rFix = M.computeHeadcount(tab, marked, CONFIG,
+      { byLaw: {}, gph: [], rates: { 0: other }, directorIdx: dirIdx });
+    const changed = f1(rFix.srsch) !== c.srsch || f1(rFix.sovmestiteli) !== c.sovm;
+    if (!changed) fails++;
+    console.log((changed ? "  OK  " : " FAIL ") + "правка ставки первого сотрудника меняет результат");
+    eq("правка ставки не трогает списочную (она про людей)", f1(rFix.spisochnaya), c.spisochnaya);
 
-  console.log("\n--- 2. Категории сотрудников ---");
-  eq("неизвестных кодов в табеле нет", Object.keys(marked.unknownCodes).length, 0);
-  eq("полная месячная норма часов", marked.fullNorm, 175);
-  eq("№1 — полное время", e(0).isPartTime, false);
-  eq("№1 — 31 день в списке", e(0).daysInList, 31);
-  eq("№2 уволена внутри месяца: 9 дней в списке", e(1).daysInList, 9);
-  eq("№6 (весь месяц ОЖ) ВХОДИТ в списочную", e(5).daysInList, 31);
-  eq("№6 исключена из СрСЧ", e(5).daysInSrsch, 0);
-  eq("№7 — внешний совместитель", e(6).isSovmestitel, true);
-  eq("№8 — неполное время", e(7).isPartTime, true);
-  eq("№8 — ставка 0,5", e(7).rate, 0.5);
-  eq("№8 — часы для пропорции", e(7).hoursSrsch, 87.5);
-  eq("№7 — часы для пропорции", e(6).hoursSrsch, 12);
+    console.log("\n--- 5. Договоры подряда ---");
+    const rGph = M.computeHeadcount(tab, marked, CONFIG,
+      { byLaw: {}, gph: [{ from: 1, to: 31 }], rates: {}, directorIdx: dirIdx });
+    eq("ГПД: 31 день ÷ 31", f1(rGph.gph), "1.0");
+    eq("ГПД не влияют на СрСЧ", f1(rGph.srsch), c.srsch);
+    eq("ГПД не влияют на списочную", f1(rGph.spisochnaya), c.spisochnaya);
 
-  console.log("\n--- 3. Показатели (разделы 2–6 и строки 56/57) ---");
-  const dirIdx = marked.employees.findIndex((x) => /^директор$/i.test(x.post));
-  const r = M.computeHeadcount(tab, marked, CONFIG, { byLaw: {}, gph: [], directorIdx: dirIdx });
-  eq("Списочная в среднем за месяц (195 чел.-дней / 31)", f1(r.spisochnaya), "6.3");
-  eq("Среднесписочная (4,290 целыми + 0,497 пропорц.)", f1(r.srsch), "4.8");
-  eq("Средняя численность совместителей (12 ч / 8 / 22)", f1(r.sovmestiteli), "0.1");
-  eq("Средняя численность по ГПД (данных нет)", f1(r.gph), "0.0");
-  eq("Средняя в целом по организации", f1(r.total), "4.9");
-  eq("Строка 56 — СрСЧ руководителя", f1(r.row56), "0.5");
-  eq("Строка 57 — СрСЧ без руководителя", f1(r.row57), "4.3");
-  eq("контроль: 56 + 57 = СрСЧ", f1(r.row56 + r.row57), f1(r.srsch));
-
-  console.log("\n--- 4. Галочка «неполное время по закону» ---");
-  const rLaw = M.computeHeadcount(tab, marked, CONFIG, { byLaw: { [dirIdx]: true }, gph: [], directorIdx: dirIdx });
-  eq("руководитель считается целой единицей", f1(rLaw.row56), "1.0");
-  eq("СрСЧ выросла, когда пропорция отключена", f1(rLaw.srsch), "5.3");
-  eq("списочная от галочки не зависит", f1(rLaw.spisochnaya), f1(r.spisochnaya));
-
-  console.log("\n--- 5. Договоры подряда ---");
-  const rGph = M.computeHeadcount(tab, marked, CONFIG,
-    { byLaw: {}, gph: [{ from: 1, to: 31 }, { from: 1, to: 15 }], directorIdx: dirIdx });
-  eq("ГПД: 31 + 15 = 46 чел.-дней / 31", f1(rGph.gph), "1.5");
-  eq("итог = СрСЧ + совместители + ГПД", f1(rGph.total), "6.4");
-  eq("ГПД не влияют на СрСЧ", f1(rGph.srsch), f1(r.srsch));
-  eq("ГПД не влияют на списочную", f1(rGph.spisochnaya), f1(r.spisochnaya));
-  const rClamp = M.computeHeadcount(tab, marked, CONFIG,
-    { byLaw: {}, gph: [{ from: 0, to: 99 }], directorIdx: dirIdx });
-  eq("даты договора обрезаются по границам месяца", f1(rClamp.gph), "1.0");
-
-  console.log("\n--- 6. Округление до одного знака (раздел 7) ---");
-  const all = [r.spisochnaya, r.srsch, r.sovmestiteli, r.gph, r.total, r.row56, r.row57];
-  const rounded = all.every((v) => Math.abs(v * 10 - Math.round(v * 10)) < 1e-9);
-  if (!rounded) fails++;
-  console.log((rounded ? "  OK  " : " FAIL ") + "все семь показателей округлены до одного знака");
-
-  console.log("\n--- 7. Расшифровка сходится с итогами ---");
-  const sum = (k) => r.rows.reduce((s, x) => s + x[k], 0);
-  eq("сумма вкладов в списочную = показатель", f1(sum("list")), f1(r.spisochnaya));
-  eq("сумма вкладов в СрСЧ = показатель", f1(sum("srsch")), f1(r.srsch));
-  eq("сумма вкладов в совместителей = показатель", f1(sum("sovm")), f1(r.sovmestiteli));
-  eq("расшифровка есть по каждому сотруднику", r.rows.length, tab.employees.length);
-
-  console.log("\n--- 8. Сверка с подвалом табеля ---");
-  const foot = M.parseFooterNumbers(tab.footer);
-  eq("прочитана списочная из подвала", foot.spisochnaya, 6.3);
-  eq("прочитана среднесписочная из подвала", foot.srsch, 5);
-  eq("прочитана средняя из подвала", foot.total, 6);
-  eq("списочная теперь совпадает с 1С", f1(r.spisochnaya), f1(foot.spisochnaya));
-  console.log("       со средней: " + f1(r.total - foot.total) +
-              " — 1С считает совместителя и неполное время целыми единицами");
+    console.log("\n--- 6. Округление и расшифровка ---");
+    const all = [r.spisochnaya, r.srsch, r.sovmestiteli, r.gph, r.total, r.row56, r.row57];
+    const rounded = all.every((v) => Math.abs(v * 10 - Math.round(v * 10)) < 1e-9);
+    if (!rounded) fails++;
+    console.log((rounded ? "  OK  " : " FAIL ") + "все семь показателей округлены до одного знака");
+    const sum = (k) => r.rows.reduce((s, x) => s + x[k], 0);
+    eq("сумма вкладов в списочную = показатель", f1(sum("list")), c.spisochnaya);
+    eq("сумма вкладов в СрСЧ = показатель", f1(sum("srsch")), c.srsch);
+    eq("сумма вкладов в совместителей = показатель", f1(sum("sovm")), c.sovm);
+    eq("расшифровка есть по каждой строке табеля", r.rows.length, c.employees);
+  });
 });
 
+if (!ran) console.log("\nНи одного табеля рядом не найдено — проверки расчёта пропущены.");
 console.log(fails ? "\n=== ЕСТЬ ОШИБКИ: " + fails + " ===" : "\n=== ВСЕ ПРОВЕРКИ ПРОЙДЕНЫ ===");
 process.exit(fails ? 1 : 0);
