@@ -72,10 +72,6 @@ if (fs.existsSync(hubPath)) {
       problems.push("справочник кодов табеля — не корректный JSON: " + err.message);
     }
     if (cfg) {
-      const day = cfg["полный_рабочий_день_часов"];
-      if (typeof day !== "number" || !(day > 0 && day <= 24)) {
-        problems.push("полный_рабочий_день_часов должен быть числом от 1 до 24, сейчас " + JSON.stringify(day));
-      }
       const codes = cfg["коды"];
       if (!codes || typeof codes !== "object") problems.push("в справочнике нет раздела «коды»");
       else {
