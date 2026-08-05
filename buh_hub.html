@@ -96,7 +96,9 @@
   }
 
   /* ---------- Основная область ---------- */
-  .main { flex: 1; padding: 32px 40px; max-width: 1000px; }
+  /* min-width: 0 — иначе flex-элемент не даёт себя сузить уже широкой таблицы,
+     и вся страница уезжает горизонтально вместо того, чтобы прокрутить таблицу. */
+  .main { flex: 1; min-width: 0; padding: 32px 40px; max-width: 1000px; }
   .content-section { display: none; }
   .content-section.active { display: block; }
   .content-section h1 { font-size: 24px; margin: 0 0 8px; }
@@ -113,8 +115,17 @@
   .card table th { color: var(--text-muted); font-weight: 500; font-size: 12px; text-transform: uppercase; }
   .card table td.num, .card table th.num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
 
-  /* Таблица не должна вылезать за карточку: если столбцов много, она прокручивается. */
-  .table-wrap { overflow-x: auto; }
+  /* Таблица не должна вылезать за карточку: если столбцов много, она прокручивается.
+     Тень у края показывает, что справа есть ещё столбцы — иначе обрезанный столбец
+     выглядит как поломанная вёрстка. */
+  .table-wrap {
+    overflow-x: auto;
+    background:
+      linear-gradient(to right, var(--bg-content) 30%, rgba(255,255,255,0)) left / 28px 100% no-repeat local,
+      linear-gradient(to left,  var(--bg-content) 30%, rgba(255,255,255,0)) right / 28px 100% no-repeat local,
+      radial-gradient(farthest-side at 0 50%, rgba(0,0,0,.2), rgba(0,0,0,0)) left / 14px 100% no-repeat scroll,
+      radial-gradient(farthest-side at 100% 50%, rgba(0,0,0,.2), rgba(0,0,0,0)) right / 14px 100% no-repeat scroll;
+  }
 
   /* Расшифровка — самая широкая таблица на странице: 7–8 столбцов, в каждом числовом
      ещё и формула. Формулам разрешено переноситься, иначе они распирают таблицу
@@ -125,7 +136,19 @@
   #breakdown-table .days { color: var(--text-muted); font-size: 12px; min-width: 96px; }
   #breakdown-table .how { color: var(--text-muted); font-size: 11px; font-weight: 400;
     white-space: normal; margin-top: 2px; text-transform: none; letter-spacing: 0; }
-  #breakdown-table th.num, #breakdown-table td.num { min-width: 104px; }
+  #breakdown-table .val { min-width: 96px; }        /* только столбцы-вклады, «Ставке» столько не нужно */
+
+  /* На узком окне таблице нужна каждая точка ширины: поля и шрифт ужимаются.
+     Блок идёт после правил выше — иначе они его перекроют, приоритет одинаковый. */
+  @media (max-width: 1250px) {
+    .main { padding: 28px 20px; }
+    .card { padding: 18px; }
+    #breakdown-table { font-size: 12px; }
+    #breakdown-table th, #breakdown-table td { padding: 7px 6px; }
+    #breakdown-table .val { min-width: 84px; }
+    #breakdown-table .fio { min-width: 110px; }
+    #breakdown-table .days { min-width: 88px; }
+  }
 
   .badge {
     display: inline-block; background: var(--warn-bg); color: var(--warn-ink);
@@ -279,6 +302,9 @@
 
         <div class="card">
           <h2>Расшифровка <span class="sub">из чего сложился каждый показатель, по каждому сотруднику</span></h2>
+          <div id="breakdown-hint" class="hidden" style="color:var(--text-muted);font-size:12.5px;margin:0 0 10px">
+            Таблица шире экрана — прокрутите её вбок или разверните окно, чтобы увидеть все столбцы.
+          </div>
           <div class="table-wrap"><table id="breakdown-table"></table></div>
         </div>
 
@@ -1277,11 +1303,12 @@ function renderBreakdown(r) {
   const cal = r.raw.calDays;
   // Знаменатель у всех один и тот же — он в шапке, а не в каждой ячейке.
   const numHead = (title, formula) =>
-    '<th class="num">' + title + '<div class="how">' + formula + ' ÷ ' + cal + ' кал. дн.</div></th>';
+    '<th class="num val">' + title + '<div class="how">' + formula + ' ÷ ' + cal + ' кал. дн.</div></th>';
   let h = '<tr><th>ФИО</th><th>Как учитывается</th><th class="num">Ставка</th><th>Дни по кодам</th>' +
           numHead("В списочную", "дни") + numHead("В СрСЧ", "ставка × дни") +
           numHead("В среднюю", "1 чел. × дни") +
-          (hasSovm ? numHead("В совместителей", "ставка × дни") : '') + '</tr>';
+          // мягкий перенос: длинное слово иначе не даёт столбцу сузиться на узком экране
+          (hasSovm ? numHead("В совмести&shy;телей", "ставка × дни") : '') + '</tr>';
 
   r.rows.forEach((row) => {
     const e = MARKED.employees[row.idx];
@@ -1292,7 +1319,7 @@ function renderBreakdown(r) {
       counts[k] = (counts[k] || 0) + 1;
     });
     const days = Object.keys(counts).map((k) => k + " " + counts[k]).join(" · ");
-    const cell = (v, how) => '<td class="num">' + (v ? '<b>' + n3(v) + '</b>' : "—") +
+    const cell = (v, how) => '<td class="num val">' + (v ? '<b>' + n3(v) + '</b>' : "—") +
       '<div class="how">' + how + '</div></td>';
 
     h += '<tr><td class="fio">' + e.fio + '</td>' +
@@ -1314,7 +1341,16 @@ function renderBreakdown(r) {
   h += totals("После округления до одного знака",
               fmt1(r.spisochnaya), fmt1(r.srsch), fmt1(r.osnovnye), fmt1(r.sovmestiteli));
   $("breakdown-table").innerHTML = h;
+  updateBreakdownHint();
 }
+
+/* Подсказка про прокрутку показывается, только если таблица правда не помещается. */
+function updateBreakdownHint() {
+  const wrap = $("breakdown-table").parentNode;
+  const clipped = wrap.scrollWidth > wrap.clientWidth + 1;
+  $("breakdown-hint").classList.toggle("hidden", !clipped);
+}
+window.addEventListener("resize", () => { if (MARKED) updateBreakdownHint(); });
 
 function kpi(label, value, accent) {
   return '<div class="kpi' + (accent ? " accent" : "") + '"><div class="lbl">' + label +
