@@ -15,7 +15,7 @@ const html = fs.readFileSync(path.join(__dirname, "buh_hub.html"), "utf8");
 const endMark = html.indexOf("ЯДРО: конец.");
 const core = html.slice(html.indexOf("const CP1251_HIGH ="), html.lastIndexOf("/*", endMark));
 const M = new Function(core + `
-  return { cp1251, readOleStream, readBiffCells, parseTabel, classifyDay, snapRate,
+  return { cp1251, readOleStream, readBiffCells, parseTabel, classifyDay, snapRate, round1,
            classifyEmployees, computeHeadcount, parseFooterNumbers };`)();
 
 const CONFIG = JSON.parse(html.split('id="codes-config">')[1].split("</script>")[0]);
@@ -62,6 +62,24 @@ const CASES = [
       eq("№8 не считается внешним совместителем", e(7).isSovmestitel, false);
       eq("№7 и №8 — один и тот же человек", e(6).fio === e(7).fio, true);
     }
+  },
+  {
+    files: ["Табель Ноэлия.xls", "Табель-пример-3.xls"],
+    title: "швейное производство, 21 человек: больничные, отпуска за свой счёт, три внешних совместителя",
+    employees: 21, persons: 18, calDays: 31, workDays: 22, period: "Июль 2026",
+    spisochnaya: "18.0", srsch: "14.4", sovm: "0.9", total: "18.9", row56: "1.0", row57: "13.4",
+    checks: (e, eq) => {
+      // Полная норма в этом табеле 176 ч, у большинства 175 — подтягивание к целой ставке
+      eq("175 из 176 подтянуто к целой ставке", e(0).rate, 1);
+      eq("сырая ставка до подтягивания", e(0).rateRaw.toFixed(3), "0.994");
+      eq("бухгалтер на 0,1 ставки — внешний совместитель", e(3).isSovmestitel, true);
+      eq("его ставка 0,1", e(3).rate, 0.1);
+      // Больничный и отпуск за свой счёт: в списочной есть, в среднесписочной нет
+      eq("22 дня больничного не идут в СрСЧ", e(4).daysInSrsch, 9);
+      eq("но в списочной эти дни есть", e(4).daysInList, 31);
+      eq("15 дней за свой счёт не идут в СрСЧ", e(13).daysInSrsch, 16);
+      eq("и в списочной они есть", e(13).daysInList, 31);
+    }
   }
 ];
 
@@ -87,6 +105,14 @@ eq("84,2 / 175 = 0,481 -> 0,5", M.snapRate(84.2 / 175), 0.5);
 eq("17,5 / 175 = 0,1 остаётся 0,1", M.snapRate(0.1), 0.1);
 eq("целая ставка остаётся целой", M.snapRate(1), 1);
 eq("далёкое значение не подтягивается", M.snapRate(0.44), 0.44);
+
+console.log("\n--- Округление до одного знака, половина вверх ---");
+// 0,1 + 0,25 + 0,5 хранится в double как 0,84999999999999998 — простой Math.round тут врёт
+eq("0,1 + 0,25 + 0,5 = 0,85 -> 0,9", M.round1(0.1 + 0.25 + 0.5), 0.9);
+eq("4,75 -> 4,8", M.round1(4.75), 4.8);
+eq("14,35 -> 14,4", M.round1(14.35), 14.4);
+eq("0,84999 честно меньше половины -> 0,8", M.round1(0.84999), 0.8);
+eq("6,29 -> 6,3", M.round1(6.29), 6.3);
 
 /* ---------------- Проверки на файлах ---------------- */
 let ran = 0;
@@ -149,7 +175,7 @@ CASES.forEach((c) => {
     const rounded = all.every((v) => Math.abs(v * 10 - Math.round(v * 10)) < 1e-9);
     if (!rounded) fails++;
     console.log((rounded ? "  OK  " : " FAIL ") + "все семь показателей округлены до одного знака");
-    const sum = (k) => r.rows.reduce((s, x) => s + x[k], 0);
+    const sum = (k) => M.round1(r.rows.reduce((s, x) => s + x[k], 0));
     eq("сумма вкладов в списочную = показатель", f1(sum("list")), c.spisochnaya);
     eq("сумма вкладов в СрСЧ = показатель", f1(sum("srsch")), c.srsch);
     eq("сумма вкладов в совместителей = показатель", f1(sum("sovm")), c.sovm);
