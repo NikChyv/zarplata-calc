@@ -266,6 +266,17 @@
       <div id="result" class="hidden">
 
         <div class="card">
+          <h2>Загруженные табели <span class="sub">отчёт заполняется за период, поэтому табелей может быть несколько</span></h2>
+          <div class="table-wrap"><table id="months-table"></table></div>
+        </div>
+
+        <div class="card">
+          <h2>Для отчёта 4-фонд <span class="sub">раздел I, таблица 1 — с начала отчётного года</span></h2>
+          <div class="kpi-row" id="period-kpi"></div>
+          <div id="period-note"></div>
+        </div>
+
+        <div class="card">
           <h2>Что распознано в файле</h2>
           <div id="meta"></div>
           <div id="warnings"></div>
@@ -299,7 +310,7 @@
         </div>
 
         <div class="card">
-          <h2>Результат</h2>
+          <h2>Результат за месяц <span class="sub" id="result-month"></span></h2>
           <div class="kpi-row" id="kpi"></div>
           <table id="detail-table" style="margin-top:18px"></table>
         </div>
@@ -1132,6 +1143,80 @@ function computeHeadcount(tab, marked, config, opts) {
   };
 }
 
+/* ---- Период: 4-фонд заполняется не по одному месяцу ----
+
+   Строки 01 и 03 отчёта заполняются «с начала отчётного года»: берётся сумма
+   месячных показателей и делится на число месяцев периода. Месячные показатели
+   к этому моменту уже округлены до одного знака — так же, как их считает бухгалтер
+   по каждому табелю, и так же они сходятся с его расчётом.
+
+   Число месяцев берётся по загруженным табелям, а не угадывается: если между
+   месяцами дырка или период начинается не с января, страница об этом говорит,
+   а не делит на то, чего у неё нет. */
+const MONTH_NAMES = ["январь", "февраль", "март", "апрель", "май", "июнь",
+                     "июль", "август", "сентябрь", "октябрь", "ноябрь", "декабрь"];
+
+// Основы названий: в табелях встречается и «Июль 2026», и «за Июля 2026 года».
+// Порядок важен: «март» проверяется раньше «ма», иначе «марта» стало бы маем.
+const MONTH_STEMS = ["янв", "фев", "март", "апрел", "ма", "июн", "июл", "авг", "сент", "октя", "ноя", "дек"];
+
+// «Июль 2026» -> {year: 2026, month: 6}
+function periodOrder(period) {
+  const t = String(period || "").toLowerCase();
+  const y = t.match(/(20\d\d)/);
+  let m = -1;
+  for (let i = 0; i < MONTH_STEMS.length; i++) {
+    if (t.indexOf(MONTH_STEMS[i]) >= 0) { m = i; break; }
+  }
+  return (y && m >= 0) ? { year: +y[1], month: m, key: +y[1] * 12 + m } : null;
+}
+
+function monthTitle(key) {
+  return MONTH_NAMES[key % 12].replace(/^./, (c) => c.toUpperCase()) + " " + Math.floor(key / 12);
+}
+
+function periodAverage(months) {
+  const known = [], unknown = [];
+  months.forEach((m) => {
+    const at = periodOrder(m.period);
+    if (at) known.push({ key: at.key, period: m.period, srsch: m.srsch, total: m.total });
+    else unknown.push(m);
+  });
+  known.sort((a, b) => a.key - b.key);
+
+  const seen = {}, duplicates = [];
+  known.forEach((m) => {
+    if (seen[m.key]) duplicates.push(monthTitle(m.key));
+    seen[m.key] = true;
+  });
+
+  const gaps = [];
+  if (known.length > 1) {
+    for (let k = known[0].key; k <= known[known.length - 1].key; k++) {
+      if (!seen[k]) gaps.push(monthTitle(k));
+    }
+  }
+
+  const all = known.concat(unknown);
+  const count = all.length;
+  let sumSrsch = 0, sumTotal = 0;
+  all.forEach((m) => { sumSrsch += m.srsch; sumTotal += m.total; });
+
+  return {
+    count: count,
+    srsch: count ? round1(sumSrsch / count) : 0,
+    total: count ? round1(sumTotal / count) : 0,
+    sumSrsch: sumSrsch, sumTotal: sumTotal,
+    months: all,
+    gaps: gaps,
+    duplicates: duplicates,
+    unknown: unknown.length,
+    // Отчёт заполняется с начала года: если первый загруженный месяц не январь,
+    // это не годовой период, и делить на число загруженных месяцев для строки 01 нельзя.
+    fromJanuary: known.length > 0 && known[0].key % 12 === 0
+  };
+}
+
 /* ---- Числа, которые 1С написала в подвале табеля (для сверки) ---- */
 function parseFooterNumbers(footer) {
   const get = (re) => { const m = (footer || "").match(re); return m ? parseFloat(m[1].replace(",", ".")) : null; };
@@ -1160,8 +1245,12 @@ const CONFIG = JSON.parse(document.getElementById("codes-config").textContent);
 const $ = (id) => document.getElementById(id);
 const fmt1 = (x) => x.toFixed(1).replace(".", ",");
 
+/* Загруженные месяцы. TAB / MARKED / STATE — это всегда выбранный месяц: так весь
+   разбор, расшифровка и сверка остались прежними, а над ними появился период. */
+const MONTHS = [];
+let CUR = -1;
 let TAB = null, MARKED = null;
-const STATE = { byLaw: {}, gph: [], rates: {}, directorIdx: -1 };
+let STATE = { byLaw: {}, gph: [], rates: {}, directorIdx: -1 };
 
 /* --- Загрузка файла --- */
 $("drop").addEventListener("click", () => $("file").click());
@@ -1185,24 +1274,60 @@ function loadFile(file) {
 function loadBytes(bytes, fileName) {
   {
     try {
-      TAB = parseTabel(readSpreadsheet(bytes));
-      MARKED = classifyEmployees(TAB, CONFIG);
-      STATE.byLaw = {};
-      STATE.gph = [];
-      STATE.rates = {};
-      const dir = MARKED.employees.findIndex((e) => /директор|руководител/i.test(e.post));
-      STATE.directorIdx = dir;
-      $("file-error").innerHTML = "";
+      const tab = parseTabel(readSpreadsheet(bytes));
+      const marked = classifyEmployees(tab, CONFIG);
+      const month = {
+        name: fileName, tab: tab, marked: marked,
+        state: {
+          byLaw: {}, gph: [], rates: {},
+          directorIdx: marked.employees.findIndex((e) => /директор|руководител/i.test(e.post))
+        }
+      };
+      // Тот же месяц, загруженный второй раз, заменяет прежний, а не удваивается.
+      const same = MONTHS.findIndex((m) => m.tab.period && m.tab.period === tab.period);
+      let replaced = "";
+      if (same >= 0) { replaced = MONTHS[same].name; MONTHS[same] = month; }
+      else MONTHS.push(month);
+
+      $("file-error").innerHTML = replaced && replaced !== fileName
+        ? '<div class="note warn" style="margin:14px 0 0">За ' + tab.period + ' уже был загружен файл <b>' +
+          replaced.replace(/[<&]/g, "") + '</b> — он заменён на <b>' + fileName.replace(/[<&]/g, "") + '</b>.</div>'
+        : "";
       $("result").classList.remove("hidden");
       $("drop").innerHTML = '<div style="font-size:15px"><b>' + fileName + '</b> загружен</div>' +
-        '<div>нажмите, чтобы выбрать другой файл</div>';
-      renderAll();
+        '<div>перетащите ещё один табель, чтобы добавить месяц к периоду</div>';
+      selectMonth(same >= 0 ? same : MONTHS.length - 1);
     } catch (err) {
-      $("result").classList.add("hidden");
+      if (!MONTHS.length) $("result").classList.add("hidden");
       $("file-error").innerHTML = '<div class="note err" style="margin:14px 0 0"><b>Файл не прочитан.</b> ' +
         String(err.message || err).replace(/[<&]/g, "") + '</div>';
     }
   }
+}
+
+function selectMonth(i) {
+  CUR = i;
+  TAB = MONTHS[i].tab;
+  MARKED = MONTHS[i].marked;
+  STATE = MONTHS[i].state;
+  renderAll();
+}
+
+function removeMonth(i) {
+  MONTHS.splice(i, 1);
+  if (!MONTHS.length) {
+    CUR = -1; TAB = null; MARKED = null;
+    $("result").classList.add("hidden");
+    $("drop").innerHTML = '<div style="font-size:15px;margin-bottom:4px">Перетащите сюда <b>табель</b> из 1С</div>' +
+      '<div>или нажмите, чтобы выбрать файл — понимаются .xls и .xlsx</div>';
+    return;
+  }
+  selectMonth(Math.min(i, MONTHS.length - 1));
+}
+
+// Показатели одного месяца — с его собственными правками ставок, ГПД и руководителя.
+function resultOf(m) {
+  return computeHeadcount(m.tab, m.marked, CONFIG, m.state);
 }
 
 /* --- Отрисовка --- */
@@ -1212,7 +1337,83 @@ function renderAll() {
   renderEmployees();
   renderDirector();
   renderGph();
-  renderResult();
+  renderResult();          // считает и период тоже
+}
+
+function renderMonths() {
+  let h = '<tr><th>Период</th><th>Файл</th><th class="num">Списочная</th><th class="num">СрСЧ</th>' +
+          '<th class="num">Средняя</th><th></th></tr>';
+  // Показываем по возрастанию месяцев, а не в порядке загрузки: так видно дырки в периоде.
+  const order = MONTHS.map((m, i) => {
+    const at = periodOrder(m.tab.period);
+    return { i: i, key: at ? at.key : Infinity };
+  }).sort((a, b) => a.key - b.key);
+
+  order.forEach((o) => {
+    const m = MONTHS[o.i];
+    const r = resultOf(m);
+    const cur = o.i === CUR;
+    h += '<tr' + (cur ? ' style="background:var(--ok-bg)"' : '') + '>' +
+         '<td><b>' + (m.tab.period || "период не определён") + '</b></td>' +
+         '<td style="color:var(--text-muted)">' + m.name.replace(/[<&]/g, "") + '</td>' +
+         '<td class="num">' + fmt1(r.spisochnaya) + '</td>' +
+         '<td class="num">' + fmt1(r.srsch) + '</td>' +
+         '<td class="num">' + fmt1(r.total) + '</td>' +
+         '<td class="num" style="white-space:nowrap">' +
+           (cur ? '<span class="badge ok">показан ниже</span>'
+                : '<button class="link" data-show="' + o.i + '">показать</button>') +
+           ' <button class="link" data-del="' + o.i + '" style="margin-left:12px">убрать</button></td></tr>';
+  });
+  $("months-table").innerHTML = h;
+  $("months-table").querySelectorAll("[data-show]").forEach((b) => {
+    b.onclick = () => selectMonth(+b.dataset.show);
+  });
+  $("months-table").querySelectorAll("[data-del]").forEach((b) => {
+    b.onclick = () => removeMonth(+b.dataset.del);
+  });
+}
+
+function renderPeriod() {
+  const per = periodAverage(MONTHS.map((m) => {
+    const r = resultOf(m);
+    return { period: m.tab.period, srsch: r.srsch, total: r.total };
+  }));
+
+  $("period-kpi").innerHTML =
+    kpi("Строка 01<br>среднесписочная численность", per.srsch, true) +
+    kpi("Строка 03<br>средняя численность", per.total);
+
+  const formula = (sum, value) => fmt1(sum) + " ÷ " + per.count + " " +
+    (per.count === 1 ? "месяц" : per.count < 5 ? "месяца" : "месяцев") + " = <b>" + fmt1(value) + "</b>";
+
+  let h = '<div class="meta-line">Строка 01: ' +
+    per.months.map((m) => fmt1(m.srsch)).join(" + ") + " = " + formula(per.sumSrsch, per.srsch) + '</div>' +
+    '<div class="meta-line">Строка 03: ' +
+    per.months.map((m) => fmt1(m.total)).join(" + ") + " = " + formula(per.sumTotal, per.total) + '</div>';
+
+  if (per.gaps.length) {
+    h += '<div class="note err" style="margin:14px 0 0"><b>В периоде не хватает месяцев: ' +
+      per.gaps.join(", ") + '.</b> Показатели посчитаны только по загруженным табелям и потому неверны для отчёта — ' +
+      'добавьте недостающие месяцы.</div>';
+  }
+  if (per.duplicates.length) {
+    h += '<div class="note warn" style="margin:14px 0 0">Один и тот же месяц загружен дважды: ' +
+      per.duplicates.join(", ") + '.</div>';
+  }
+  if (per.unknown) {
+    h += '<div class="note warn" style="margin:14px 0 0">У ' + per.unknown +
+      ' табеля не удалось определить месяц — он посчитан в периоде, но проверить порядок месяцев страница не может.</div>';
+  }
+  if (!per.fromJanuary && !per.unknown) {
+    h += '<div class="note warn" style="margin:14px 0 0">Период начинается не с января. Строки 01 и 03 заполняются ' +
+      '<b>с начала отчётного года</b>: если отчёт годовой или за квартал не первый, загрузите табели начиная с января — ' +
+      'иначе делить на число месяцев нельзя.</div>';
+  }
+  h += '<div class="note" style="background:#f7f8fa;border:1px solid var(--border);color:var(--text-muted);margin:14px 0 0">' +
+    'Строку 03 заполняют только коммерческие организации, имеющие право платить взносы ежеквартально, ' +
+    'и только в отчёте за январь–декабрь.</div>';
+
+  $("period-note").innerHTML = h;
 }
 
 function renderMeta() {
@@ -1339,11 +1540,14 @@ $("gph-add").addEventListener("click", () => {
 });
 
 function renderResult() {
-  const r = computeHeadcount(TAB, MARKED, CONFIG, STATE);
+  const r = resultOf(MONTHS[CUR]);
+  renderMonths();                     // в списке месяцев те же числа — правки должны попадать и туда
+  renderPeriod();
+  $("result-month").textContent = TAB.period ? "— " + TAB.period : "";
 
   $("kpi").innerHTML =
     kpi("Списочная численность<br>в среднем за месяц", r.spisochnaya) +
-    kpi("Среднесписочная численность<br>(для 4-фонда)", r.srsch, true) +
+    kpi("Среднесписочная численность<br>за этот месяц", r.srsch, true) +
     kpi("Средняя численность<br>внешних совместителей", r.sovmestiteli) +
     kpi("Средняя численность<br>по ГПД", r.gph) +
     kpi("Средняя численность<br>в целом по организации", r.total, true);

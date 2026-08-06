@@ -95,7 +95,7 @@ if (fs.existsSync(hubPath)) {
   // Тест вытаскивает ядро расчёта из buh_hub.html по этим меткам.
   ["const CP1251_HIGH =", "ЯДРО: конец.", "function parseTabel(", "function computeHeadcount(",
    "function classifyEmployees(", "function classifyDay(", "function readSpreadsheet(",
-   "function inflateRaw(", "function round1("]
+   "function inflateRaw(", "function round1(", "function periodOrder(", "function periodAverage("]
     .forEach((m) => {
       if (!hub.includes(m)) problems.push("в buh_hub.html пропала метка «" + m + "», от неё зависит test-headcount.js");
     });

@@ -16,7 +16,8 @@ const endMark = html.indexOf("ЯДРО: конец.");
 const core = html.slice(html.indexOf("const CP1251_HIGH ="), html.lastIndexOf("/*", endMark));
 const M = new Function(core + `
   return { cp1251, readOleStream, readBiffCells, parseTabel, classifyDay, snapRate, round1,
-           classifyEmployees, computeHeadcount, parseFooterNumbers, readSpreadsheet, readXlsxCells, inflateRaw, readZip };`)();
+           classifyEmployees, computeHeadcount, parseFooterNumbers, readSpreadsheet, readXlsxCells, inflateRaw, readZip,
+           periodOrder, periodAverage };`)();
 
 const CONFIG = JSON.parse(html.split('id="codes-config">')[1].split("</script>")[0]);
 
@@ -202,6 +203,45 @@ eq("84,2 / 175 = 0,481 -> 0,5", M.snapRate(84.2 / 175), 0.5);
 eq("17,5 / 175 = 0,1 остаётся 0,1", M.snapRate(0.1), 0.1);
 eq("целая ставка остаётся целой", M.snapRate(1), 1);
 eq("далёкое значение не подтягивается", M.snapRate(0.44), 0.44);
+
+console.log("\n--- Период: несколько табелей для 4-фонда ---");
+eq("«Июль 2026» разобран", M.periodOrder("Июль 2026").month, 6);
+eq("падеж не мешает", M.periodOrder("за Июля 2026 года").month, 6);
+eq("год из периода", M.periodOrder("Январь 2026").year, 2026);
+eq("непонятный период — null", M.periodOrder("не определён"), null);
+
+const per3 = M.periodAverage([
+  { period: "Февраль 2026", srsch: 4.1, total: 5.0 },
+  { period: "Январь 2026", srsch: 5.8, total: 6.0 },
+  { period: "Март 2026", srsch: 6.0, total: 6.4 }
+]);
+eq("месяцев в периоде", per3.count, 3);
+// (5,8 + 4,1 + 6,0) ÷ 3 = 5,3 — сумма месячных, делённая на число месяцев
+eq("среднемесячная СрСЧ", per3.srsch, 5.3);
+eq("среднемесячная средняя", per3.total, 5.8);
+eq("месяцы отсортированы", per3.months[0].period, "Январь 2026");
+eq("дырок нет", per3.gaps.length, 0);
+eq("период с января", per3.fromJanuary, true);
+
+const perGap = M.periodAverage([
+  { period: "Январь 2026", srsch: 5, total: 5 },
+  { period: "Апрель 2026", srsch: 5, total: 5 }
+]);
+eq("пропущенные месяцы названы", perGap.gaps.join(", "), "Февраль 2026, Март 2026");
+
+const perLate = M.periodAverage([{ period: "Июль 2026", srsch: 5, total: 5 }]);
+eq("период не с января — это видно", perLate.fromJanuary, false);
+eq("один месяц — делим на один", perLate.srsch, 5);
+
+const perDup = M.periodAverage([
+  { period: "Июль 2026", srsch: 5, total: 5 },
+  { period: "Июль 2026", srsch: 7, total: 7 }
+]);
+eq("повтор месяца замечен", perDup.duplicates.join(""), "Июль 2026");
+
+const perUnknown = M.periodAverage([{ period: "", srsch: 4, total: 4 }]);
+eq("табель без периода всё равно посчитан", perUnknown.count, 1);
+eq("и про него сказано", perUnknown.unknown, 1);
 
 console.log("\n--- Округление до одного знака, половина вверх ---");
 // 0,1 + 0,25 + 0,5 хранится в double как 0,84999999999999998 — простой Math.round тут врёт
