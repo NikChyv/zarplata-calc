@@ -497,7 +497,11 @@ function readBiffCells(stream) {
       }
     } else if (type === 0x0204 || type === 0x00D6) {         // LABEL / RSTRING
       const r = u16(d), c = u16(d + 2);
-      if (biff8) put(r, c, biff8Str(d + 6, 2).text);
+      // В BIFF8 после длины идёт байт-флаг сжатия, в BIFF5 сразу текст. Версия из BOF
+      // тут ненадёжна: Excel, пересохраняя выгрузку 1С, пишет BIFF5-записи под шапкой
+      // BIFF8 (у файла два BOF — 0x0500 у книги и 0x0600 у листа). Поэтому смотрим на
+      // сам байт: флаг сжатия — это 0..15, текст с таких байтов не начинается.
+      if (biff8 && stream[d + 8] < 0x10) put(r, c, biff8Str(d + 6, 2).text);
       else {
         const cch = u16(d + 6);
         put(r, c, cp1251(stream.subarray(d + 8, d + 8 + cch)));
@@ -893,13 +897,54 @@ function snapRate(x) {
   return n === null ? x : n;
 }
 
-function deriveRate(normHours, allNorms) {
+/* Длины рабочей недели из ТК РБ, которые встречаются в табелях: 40 — обычная,
+   38,5 и 36 — сокращённая по условиям труда, 35 и 23 — несовершеннолетние
+   (16–18 и 14–16 лет), 33 — врачи-стоматологи. Целая ставка на такой неделе —
+   это НЕ целая ставка на сорокачасовой: 168,4 ч медсестры и 144,2 ч стоматолога
+   в табеле «Мудрый зуб» — каждая единица, а не 0,96 и 0,82.
+
+   В табеле нужной нормы может не быть вообще: у несовершеннолетних хореографов
+   «Дэнс-Студио» стоит 38,25 ч — это 0,25 ставки от 35-часовой недели (153,1 ч),
+   а полных 153,1 ч в том табеле нет ни у кого. Поэтому кандидаты в полные нормы —
+   это и нормы из табеля, и норма самой длинной недели, пересчитанная на короткие. */
+const WEEK_HOURS = [40, 38.5, 36, 35, 33, 23];
+
+function fullNormCandidates(norms) {
+  const out = norms.slice();                            // отсортированы по убыванию
+  const maxNorm = out.length ? out[0] : 0;
+  WEEK_HOURS.forEach((w) => {
+    const n = maxNorm * w / 40;
+    if (n > 0 && !out.some((x) => Math.abs(x - n) < 0.5)) out.push(n);
+  });
+  return out.sort((a, b) => b - a);
+}
+
+/* Ставка = норма ÷ полная норма, и кандидатов в полную норму несколько.
+
+   Сначала ищем попадание в точку (промах меньше 0,005) от самой большой нормы вниз,
+   и только потом — попадание по грубому допуску. Порядок именно такой из-за
+   несовершеннолетних: 38,25 / 175 = 0,2186 промахивается мимо 0,2 на 0,019 и по
+   грубому допуску прошло бы, а 38,25 / 153,1 = 0,2499 — это ровно 0,25.
+
+   Делить на собственную норму (доля = 1) можно только последним: иначе любой
+   сотрудник оказался бы целой ставкой. */
+const RATE_EXACT = 0.005;
+
+function deriveRate(normHours, candidates) {
   if (!normHours) return 1;
-  for (let i = 0; i < allNorms.length; i++) {          // нормы отсортированы по убыванию
-    const n = niceRate(normHours / allNorms[i]);
-    if (n !== null) return n;
-  }
-  return snapRate(normHours / allNorms[0]);
+  const pick = (limit) => {
+    for (let i = 0; i < candidates.length; i++) {        // отсортированы по убыванию
+      if (!(candidates[i] > 0)) continue;
+      const raw = normHours / candidates[i];
+      const n = niceRate(raw);
+      if (n !== null && Math.abs(raw - n) <= limit) return n;
+    }
+    return null;
+  };
+  const exact = pick(RATE_EXACT);
+  if (exact !== null) return exact;
+  const loose = pick(RATE_TOLERANCE);
+  return loose !== null ? loose : snapRate(normHours / candidates[0]);
 }
 
 /* Ключ человека: одна и та же фамилия в разных строках табеля пишется то со звёздочкой,
@@ -914,6 +959,7 @@ function classifyEmployees(tab, config) {
   const norms = [];
   tab.employees.forEach((e) => { if (e.normHours > 0 && norms.indexOf(e.normHours) < 0) norms.push(e.normHours); });
   norms.sort((a, b) => b - a);
+  const candidates = fullNormCandidates(norms);
   const fullNorm = norms.length ? norms[0] : 0;
   const unknown = {};
   const list = tab.employees.map((e, idx) => {
@@ -939,7 +985,7 @@ function classifyEmployees(tab, config) {
     const isSovmestitel = !isInner &&
       (/совместител/i.test(e.post) || /совм\./i.test(e.post) || /\*/.test(e.fio) || /\*/.test(e.post));
     const rateRaw = fullNorm > 0 ? e.normHours / fullNorm : 1;
-    const rate = deriveRate(e.normHours, norms);
+    const rate = deriveRate(e.normHours, candidates);
     return {
       idx: idx, fio: e.fio, post: e.post,
       normHours: e.normHours, workedHours: e.workedHours,
