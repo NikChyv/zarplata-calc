@@ -144,6 +144,27 @@
   /* min-width: 0 — иначе flex-элемент не даёт себя сузить уже широкой таблицы,
      и вся страница уезжает горизонтально вместо того, чтобы прокрутить таблицу. */
   .main { flex: 1; min-width: 0; padding: 32px 40px; max-width: 1000px; }
+
+  /* На телефоне колонка в 240 точек не оставляет места содержимому: навигация
+     переезжает наверх и становится строкой вкладок. Калькулятором зарплаты
+     пользуются с телефона, поэтому это не мелочь. */
+  @media (max-width: 860px) {
+    body { display: block; }
+    .sidebar {
+      width: auto; padding: 10px 0 0; flex-direction: row; flex-wrap: wrap;
+      align-items: center; gap: 2px;
+    }
+    .sidebar-title {
+      width: 100%; padding: 0 14px 10px; margin-bottom: 6px; font-size: 14px;
+    }
+    .nav-group-label { display: none; }
+    .nav-item {
+      width: auto; border-left: 0; border-bottom: 3px solid transparent;
+      padding: 9px 14px; font-size: 13px;
+    }
+    .nav-item.active { border-left-color: transparent; border-bottom-color: var(--accent); }
+    .main { padding: 20px 14px; max-width: none; }
+  }
   .content-section { display: none; }
   .content-section.active { display: block; }
   .content-section h1 { font-size: 24px; margin: 0 0 8px; }
