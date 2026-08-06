@@ -1,4 +1,4 @@
-// Проверка расчёта численности. Логика берётся из buh_hub.html как есть,
+// Проверка расчёта численности. Логика берётся из index.html как есть,
 // данные — из табелей, которые лежат рядом.
 //
 // Запуск: node test-headcount.js
@@ -11,7 +11,7 @@
 const fs = require("fs");
 const path = require("path");
 
-const html = fs.readFileSync(path.join(__dirname, "buh_hub.html"), "utf8");
+const html = fs.readFileSync(path.join(__dirname, "index.html"), "utf8");
 const endMark = html.indexOf("ЯДРО: конец.");
 const core = html.slice(html.indexOf("const CP1251_HIGH ="), html.lastIndexOf("/*", endMark));
 const M = new Function(core + `

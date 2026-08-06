@@ -57,13 +57,14 @@ if (!html.includes(marker)) {
   .forEach((m) => { if (!html.includes(m)) problems.push("в index.html пропала метка «" + m + "», от неё зависит test.js"); });
 
 // ---- Рабочее место бухгалтера: справочник кодов табеля ----
-const hubPath = __dirname + "/buh_hub.html";
-if (fs.existsSync(hubPath)) {
-  const hub = fs.readFileSync(hubPath, "utf8");
+// Обе страницы живут в одном index.html: калькулятор зарплаты и расчёт численности —
+// это две вкладки. buh_hub.html остался редиректом, чтобы старая ссылка работала.
+{
+  const hub = html;
   const hubMarker = 'id="codes-config">';
 
   if (!hub.includes(hubMarker)) {
-    problems.push("в buh_hub.html нет блока с кодами табеля (script id=\"codes-config\")");
+    problems.push("в index.html нет блока с кодами табеля (script id=\"codes-config\")");
   } else {
     let cfg = null;
     try {
@@ -92,13 +93,27 @@ if (fs.existsSync(hubPath)) {
     }
   }
 
-  // Тест вытаскивает ядро расчёта из buh_hub.html по этим меткам.
+  // Тест вытаскивает ядро расчёта из index.html по этим меткам.
   ["const CP1251_HIGH =", "ЯДРО: конец.", "function parseTabel(", "function computeHeadcount(",
    "function classifyEmployees(", "function classifyDay(", "function readSpreadsheet(",
    "function inflateRaw(", "function round1(", "function periodOrder(", "function periodAverage("]
     .forEach((m) => {
-      if (!hub.includes(m)) problems.push("в buh_hub.html пропала метка «" + m + "», от неё зависит test-headcount.js");
+      if (!hub.includes(m)) problems.push("в index.html пропала метка «" + m + "», от неё зависит test-headcount.js");
     });
+}
+
+// Старая ссылка на рабочее место должна продолжать работать: buh_hub.html —
+// редирект на index.html, и в нём не должно снова завестись содержимое.
+{
+  const oldPath = __dirname + "/buh_hub.html";
+  if (!fs.existsSync(oldPath)) {
+    problems.push("пропал buh_hub.html — он нужен как редирект, на него есть ссылки в переписке и закладках");
+  } else {
+    const old = fs.readFileSync(oldPath, "utf8");
+    if (!/http-equiv="refresh"[^>]*index\.html/i.test(old)) {
+      problems.push("buh_hub.html больше не редирект на index.html — старая ссылка перестанет работать");
+    }
+  }
 }
 
 // Абсолютные пути с машины разработчика: локально работают, на GitHub — нет.

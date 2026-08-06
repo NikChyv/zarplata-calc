@@ -1,13 +1,9 @@
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Калькулятор зарплаты «на руки → начислено» · ITNIMAX</title>
-<meta name="description" content="Расчёт начисленной зарплаты от суммы на руки: ФСЗН, подоходный налог, вычеты, профсоюз, ДПНС и полная стоимость сотрудника для нанимателя. Республика Беларусь, ставки 2026 года.">
-<meta name="color-scheme" content="light dark">
-<meta name="theme-color" content="#2a78d6">
-<meta property="og:type" content="website">
-<meta property="og:title" content="Калькулятор зарплаты «на руки → начислено» · ITNIMAX">
-<meta property="og:description" content="Сколько нужно начислить, чтобы сотрудник получил нужную сумму на руки. Ставки 2026 года, Республика Беларусь.">
-<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='14' fill='%232a78d6'/%3E%3Ctext x='32' y='44' font-family='system-ui,sans-serif' font-size='30' font-weight='600' fill='%23fff' text-anchor='middle'%3EBr%3C/text%3E%3C/svg%3E">
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Рабочее место бухгалтера</title>
 
 <!--
   ============================================================================
@@ -44,8 +40,247 @@
 }
 </script>
 
+<!--
+  ============================================================================
+  КОДЫ ТАБЕЛЯ И ПАРАМЕТРЫ РАСЧЁТА ЧИСЛЕННОСТИ.
+  Единственное место, которое нужно править, когда в табелях встретится
+  новый код. Логику расчёта трогать не нужно.
+
+  У каждого кода ТРИ флага — по одному на каждый показатель, и они РАЗНЫЕ.
+  Это не ошибка и не дублирование:
+
+    код                       | списочная | срсч  | средняя
+    --------------------------|-----------|-------|--------
+    явка, выходной, отпуск    |   true    | true  |  true
+    больничный                |   true    | false |  true
+    отпуск за свой счёт       |   true    | false |  true
+    отпуск по уходу (декрет)  |   true    | false |  false
+
+  Разница между «срсч» и «средняя» видна на больничном: день болезни не идёт
+  в среднесписочную, но человек в средней численности остаётся. А декретчица
+  есть в списочной и не входит ни в среднесписочную, ни в среднюю.
+  Проверено на табелях трёх клиентов за июль 2026.
+
+  Неизвестный код НЕ угадывается: калькулятор покажет предупреждение
+  и не учтёт этот день нигде, пока код не добавят сюда.
+  ============================================================================
+-->
+<script type="application/json" id="codes-config">
+{
+  "коды": {
+    "В":  { "название": "выходной / нерабочий день",            "списочная": true, "срсч": true,  "средняя": true },
+    "О":  { "название": "трудовой отпуск",                      "списочная": true, "срсч": true,  "средняя": true },
+    "П":  { "название": "праздничный день",                     "списочная": true, "срсч": true,  "средняя": true },
+    "ОЖ": { "название": "отпуск по уходу за ребёнком (декрет)", "списочная": true, "срсч": false, "средняя": false },
+    "Д":  { "название": "декретный отпуск",                     "списочная": true, "срсч": false, "средняя": false },
+    "Б":  { "название": "больничный",                           "списочная": true, "срсч": false, "средняя": true },
+    "А":  { "название": "отпуск за свой счёт",                  "списочная": true, "срсч": false, "средняя": true },
+    "К":  { "название": "командировка",                         "списочная": true, "срсч": true,  "средняя": true },
+    "--": { "название": "уволен — в списке не состоит (1С 8; в других версиях клетка пустая)",
+                                                                "списочная": false, "срсч": false, "средняя": false }
+  }
+}
+</script>
+
 <style>
-:root {
+  :root {
+    --bg-sidebar: #1f2430;
+    --bg-sidebar-hover: #2a3040;
+    --bg-content: #ffffff;
+    --bg-page: #f4f5f7;
+    --accent: #3d6bff;
+    --text-main: #1f2430;
+    --text-muted: #6b7280;
+    --text-sidebar: #c7cbd4;
+    --text-sidebar-active: #ffffff;
+    --border: #e3e5ea;
+    /* Приподнятые поверхности и мягкий акцент. Держим их переменными, а не хексами
+       по месту: иначе тёмная тема оставляет белые заплатки посреди страницы. */
+    --raised: #fbfcfd;
+    --plain: #f7f8fa;
+    --accent-soft: #f2f6ff;
+    --accent-soft-line: #c9d8ff;
+    --ok-bg: #ecfdf3; --ok-ink: #027a48; --ok-line: #a6f4c5;
+    --warn-bg: #fff4e5; --warn-ink: #b45309; --warn-line: #fcd9a4;
+    --err-bg: #fef3f2; --err-ink: #b42318; --err-line: #fecdca;
+  }
+
+  * { box-sizing: border-box; }
+
+  body {
+    margin: 0;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Arial, sans-serif;
+    background: var(--bg-page);
+    color: var(--text-main);
+    display: flex;
+    min-height: 100vh;
+  }
+
+  /* ---------- Боковая навигация ---------- */
+  .sidebar {
+    width: 240px; flex-shrink: 0; background: var(--bg-sidebar);
+    padding: 24px 0; display: flex; flex-direction: column;
+  }
+  .sidebar-title {
+    color: var(--text-sidebar-active); font-size: 15px; font-weight: 600;
+    padding: 0 20px 20px; border-bottom: 1px solid rgba(255,255,255,0.08); margin-bottom: 12px;
+  }
+  .nav-group-label {
+    color: var(--text-muted); font-size: 11px; text-transform: uppercase;
+    letter-spacing: 0.06em; padding: 16px 20px 6px;
+  }
+  .nav-item {
+    display: block; width: 100%; text-align: left; background: none; border: none;
+    color: var(--text-sidebar); padding: 10px 20px; font-size: 14px; cursor: pointer;
+    border-left: 3px solid transparent; transition: background 0.15s ease; font-family: inherit;
+  }
+  .nav-item:hover { background: var(--bg-sidebar-hover); }
+  .nav-item.active {
+    background: var(--bg-sidebar-hover); color: var(--text-sidebar-active);
+    border-left-color: var(--accent); font-weight: 500;
+  }
+
+  /* ---------- Основная область ---------- */
+  /* min-width: 0 — иначе flex-элемент не даёт себя сузить уже широкой таблицы,
+     и вся страница уезжает горизонтально вместо того, чтобы прокрутить таблицу. */
+  .main { flex: 1; min-width: 0; padding: 32px 40px; max-width: 1000px; }
+  .content-section { display: none; }
+  .content-section.active { display: block; }
+  .content-section h1 { font-size: 24px; margin: 0 0 8px; }
+  .content-section .subtitle { color: var(--text-muted); font-size: 14px; margin-bottom: 28px; }
+
+  .card {
+    background: var(--bg-content); border: 1px solid var(--border);
+    border-radius: 8px; padding: 24px; margin-bottom: 20px;
+  }
+  .card h2 { font-size: 16px; margin: 0 0 12px; }
+  .card h2 .sub { font-weight: 400; color: var(--text-muted); font-size: 13px; margin-left: 6px; }
+  .card table { width: 100%; border-collapse: collapse; font-size: 14px; }
+  .card table th, .card table td { text-align: left; padding: 8px 10px; border-bottom: 1px solid var(--border); }
+  .card table th { color: var(--text-muted); font-weight: 500; font-size: 12px; text-transform: uppercase; }
+  .card table td.num, .card table th.num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+
+  /* Таблица не должна вылезать за карточку: если столбцов много, она прокручивается.
+     Тень у края показывает, что справа есть ещё столбцы — иначе обрезанный столбец
+     выглядит как поломанная вёрстка. */
+  .table-wrap {
+    overflow-x: auto;
+    background:
+      linear-gradient(to right, var(--bg-content) 30%, rgba(255,255,255,0)) left / 28px 100% no-repeat local,
+      linear-gradient(to left,  var(--bg-content) 30%, rgba(255,255,255,0)) right / 28px 100% no-repeat local,
+      radial-gradient(farthest-side at 0 50%, rgba(0,0,0,.2), rgba(0,0,0,0)) left / 14px 100% no-repeat scroll,
+      radial-gradient(farthest-side at 100% 50%, rgba(0,0,0,.2), rgba(0,0,0,0)) right / 14px 100% no-repeat scroll;
+  }
+
+  /* Расшифровка — самая широкая таблица на странице: 7–8 столбцов, в каждом числовом
+     ещё и формула. Формулам разрешено переноситься, иначе они распирают таблицу
+     и выталкивают её за край карточки. */
+  #breakdown-table { font-size: 13px; }
+  #breakdown-table th, #breakdown-table td { padding: 8px 8px; vertical-align: top; }
+  #breakdown-table .fio { min-width: 130px; }
+  #breakdown-table .days { color: var(--text-muted); font-size: 12px; min-width: 96px; }
+  #breakdown-table .how { color: var(--text-muted); font-size: 11px; font-weight: 400;
+    white-space: normal; margin-top: 2px; text-transform: none; letter-spacing: 0; }
+  #breakdown-table .val { min-width: 96px; }        /* только столбцы-вклады, «Ставке» столько не нужно */
+
+  /* На узком окне таблице нужна каждая точка ширины: поля и шрифт ужимаются.
+     Блок идёт после правил выше — иначе они его перекроют, приоритет одинаковый. */
+  @media (max-width: 1250px) {
+    .main { padding: 28px 20px; }
+    .card { padding: 18px; }
+    #breakdown-table { font-size: 12px; }
+    #breakdown-table th, #breakdown-table td { padding: 7px 6px; }
+    #breakdown-table .val { min-width: 84px; }
+    #breakdown-table .fio { min-width: 110px; }
+    #breakdown-table .days { min-width: 88px; }
+  }
+
+  .badge {
+    display: inline-block; background: var(--warn-bg); color: var(--warn-ink);
+    font-size: 12px; padding: 2px 8px; border-radius: 4px; margin-left: 6px;
+  }
+  .badge.ok { background: var(--ok-bg); color: var(--ok-ink); }
+  .badge.err { background: var(--err-bg); color: var(--err-ink); }
+  .badge.grey { background: var(--plain); color: var(--text-muted); }
+
+  input, select { font-family: inherit; font-size: 14px; padding: 8px 10px;
+    border: 1px solid var(--border); border-radius: 6px; width: 100%; margin-top: 4px; }
+  input[type="checkbox"] { width: auto; margin: 0; }
+  input.small { width: 72px; margin-top: 0; padding: 6px 8px; text-align: right; }
+  label { display: block; font-size: 13px; color: var(--text-muted); margin-bottom: 14px; }
+
+  button.primary {
+    background: var(--accent); color: white; border: none; padding: 10px 18px;
+    border-radius: 6px; font-size: 14px; cursor: pointer; font-family: inherit;
+  }
+  button.link {
+    background: none; border: none; color: var(--accent); cursor: pointer;
+    font-size: 13px; padding: 4px 0; font-family: inherit;
+  }
+  button.ghost {
+    background: none; border: 1px solid var(--border); color: var(--text-main);
+    padding: 6px 12px; border-radius: 6px; font-size: 13px; cursor: pointer; font-family: inherit;
+  }
+
+  .drop {
+    border: 2px dashed var(--border); border-radius: 8px; padding: 28px;
+    text-align: center; color: var(--text-muted); font-size: 14px; cursor: pointer;
+    transition: border-color .15s, background .15s;
+  }
+  .drop:hover, .drop.over { border-color: var(--accent); background: var(--accent-soft); }
+  .drop b { color: var(--accent); }
+
+  .note { border-radius: 6px; padding: 12px 14px; font-size: 13.5px; line-height: 1.5; margin-bottom: 14px; }
+  .note.warn { background: var(--warn-bg); color: var(--warn-ink); border: 1px solid var(--warn-line); }
+  .note.err  { background: var(--err-bg);  color: var(--err-ink);  border: 1px solid var(--err-line); }
+  .note.ok   { background: var(--ok-bg);   color: var(--ok-ink);   border: 1px solid var(--ok-line); }
+  .note ul { margin: 8px 0 0; padding-left: 20px; }
+  .note.plain { background: var(--plain); color: var(--text-muted); border: 1px solid var(--border); }
+
+  .kpi-row { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 12px; }
+  .kpi {
+    border: 1px solid var(--border); border-radius: 8px; padding: 14px 16px; background: var(--raised);
+  }
+  .kpi .lbl { font-size: 12px; color: var(--text-muted); line-height: 1.35; min-height: 32px; }
+  .kpi .val { font-size: 28px; font-weight: 600; margin-top: 6px; font-variant-numeric: tabular-nums; }
+  .kpi.accent { background: var(--accent-soft); border-color: var(--accent-soft-line); }
+
+  .meta-line { color: var(--text-muted); font-size: 13px; margin-bottom: 4px; }
+  .hidden { display: none; }
+  details summary { cursor: pointer; font-size: 14px; color: var(--accent); }
+  details .body { font-size: 14px; margin-top: 12px; }
+  details .body p { margin: 0 0 10px; }
+  .gph-row { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; font-size: 13px; }
+  .gph-row input[type="text"] { flex: 1 1 auto; margin-top: 0; }
+
+  /* Тёмная тема оболочки. Значения взяты из палитры калькулятора зарплаты,
+     она проверена на контраст и на различимость при дальтонизме. */
+  @media (prefers-color-scheme: dark) {
+    :root:where(:not([data-theme="light"])) {
+      color-scheme: dark;
+      --bg-content: #1a1a19;
+      --bg-page: #0d0d0d;
+      --accent: #3987e5;
+      --text-main: #ffffff;
+      --text-muted: #898781;
+      --border: #2c2c2a;
+      --raised: #232322;
+      --plain: #1f1f1e;
+      --accent-soft: #15233a;
+      --accent-soft-line: #274264;
+      --ok-bg: #12261a; --ok-ink: #4ade80; --ok-line: #1d4d30;
+      --warn-bg: #2a2110; --warn-ink: #fab219; --warn-line: #4d3c17;
+      --err-bg: #2a1615; --err-ink: #f87171; --err-line: #4d2422;
+    }
+  }
+
+  /* ======================================================================
+     Стили калькулятора зарплаты. Перенесены из index.html как есть, но с
+     областью видимости .zp: у двух страниц свои палитры и свои правила для
+     table, input и details, и без ограничения они переопределяют друг друга.
+     ====================================================================== */
+
+.zp {
   color-scheme: light;
   --plane:      #f9f9f7;
   --surface:    #fcfcfb;
@@ -66,7 +301,7 @@
   --s-union:    #e87ba4;
 }
 @media (prefers-color-scheme: dark) {
-  :root:where(:not([data-theme="light"])) {
+  :root:where(:not([data-theme="light"])) .zp {
     color-scheme: dark;
     --plane:     #0d0d0d;
     --surface:   #1a1a19;
@@ -87,189 +322,218 @@
   }
 }
 
-* { box-sizing: border-box; }
-html { -webkit-text-size-adjust: 100%; }
-body {
+.zp * { box-sizing: border-box; }
+.zp { -webkit-text-size-adjust: 100%; }
+.zp {
   margin: 0; padding: 0 16px 56px;
   background: var(--plane); color: var(--ink);
   font: 15px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif;
 }
-.app { max-width: 1120px; margin: 0 auto; }
+.zp .app { max-width: 1120px; margin: 0 auto; }
 
-/* ------------------------------- Шапка ------------------------------- */
+.zp /* ------------------------------- Шапка ------------------------------- */
 .bar {
   display: flex; align-items: center; gap: 14px; flex-wrap: wrap;
   padding: 22px 2px 18px;
 }
-.bar h1 { font-size: 17px; font-weight: 600; margin: 0; letter-spacing: -0.1px; }
-.bar .sub { font-size: 13px; color: var(--muted); margin-top: 2px; }
-.spacer { flex: 1 1 auto; }
-.pill {
+.zp .bar h1 { font-size: 17px; font-weight: 600; margin: 0; letter-spacing: -0.1px; }
+.zp .bar .sub { font-size: 13px; color: var(--muted); margin-top: 2px; }
+.zp .spacer { flex: 1 1 auto; }
+.zp .pill {
   font-size: 12px; font-weight: 600; color: var(--ink-2);
   background: var(--surface); border: 1px solid var(--line);
   padding: 5px 11px; border-radius: 999px; white-space: nowrap; cursor: help;
 }
-.pill b { color: var(--ink); }
+.zp .pill b { color: var(--ink); }
 
-/* ------------------------------ Переключатель ------------------------------ */
+.zp /* ------------------------------ Переключатель ------------------------------ */
 .switch {
   display: inline-flex; gap: 3px; padding: 3px; margin-bottom: 16px;
   background: var(--raised); border-radius: 11px; max-width: 100%; flex-wrap: wrap;
 }
-.switch button {
+.zp .switch button {
   border: 0; background: transparent; color: var(--ink-2); cursor: pointer;
   font: inherit; font-size: 13.5px; font-weight: 550;
   padding: 8px 15px; border-radius: 9px; white-space: nowrap;
 }
-.switch button:hover { color: var(--ink); }
-.switch button[aria-pressed="true"] {
+.zp .switch button:hover { color: var(--ink); }
+.zp .switch button[aria-pressed="true"] {
   background: var(--surface); color: var(--ink);
   box-shadow: 0 1px 2px rgba(0,0,0,.08); border: 1px solid var(--line);
   padding: 7px 14px;
 }
 
-/* -------------------------------- Сетка -------------------------------- */
+.zp /* -------------------------------- Сетка -------------------------------- */
 .grid { display: grid; grid-template-columns: minmax(0,0.92fr) minmax(0,1fr); gap: 16px; align-items: start; }
-@media (max-width: 900px) { .grid { grid-template-columns: 1fr; } }
+@media (max-width: 900px) { .zp .grid { grid-template-columns: 1fr; } }
 
-.panel {
+.zp .panel {
   background: var(--surface); border: 1px solid var(--line);
   border-radius: 14px; padding: 18px;
 }
-.panel + .panel { margin-top: 16px; }
-.panel > h2 {
+.zp .panel + .panel { margin-top: 16px; }
+.zp .panel > h2 {
   font-size: 11px; text-transform: uppercase; letter-spacing: 0.8px;
   color: var(--muted); font-weight: 650; margin: 0 0 14px;
 }
-@media (min-width: 901px) { .col-right { position: sticky; top: 16px; } }
+@media (min-width: 901px) { .zp .col-right { position: sticky; top: 16px; } }
 
-/* -------------------------------- Поля -------------------------------- */
+.zp /* -------------------------------- Поля -------------------------------- */
 .amount { position: relative; }
-.amount label { display: block; font-size: 13px; color: var(--ink-2); margin-bottom: 7px; }
-.amount input {
+.zp .amount label { display: block; font-size: 13px; color: var(--ink-2); margin-bottom: 7px; }
+.zp .amount input {
   width: 100%; font: inherit; font-size: 30px; font-weight: 620; letter-spacing: -0.5px;
   padding: 12px 52px 12px 14px; color: var(--ink);
   background: var(--plane); border: 1px solid var(--line-hard); border-radius: 11px;
 }
-.amount .unit {
+.zp .amount .unit {
   position: absolute; right: 16px; bottom: 17px;
   color: var(--muted); font-size: 17px; pointer-events: none;
 }
-input:focus-visible, button:focus-visible, summary:focus-visible {
+.zp input:focus-visible, .zp button:focus-visible, .zp summary:focus-visible {
   outline: 2px solid var(--accent); outline-offset: 1px;
 }
 
-.opt {
+.zp .opt {
   display: flex; align-items: center; gap: 12px;
   padding: 11px 0; border-top: 1px solid var(--line);
 }
-.opt:first-of-type { border-top: 0; }
-.opt .name { flex: 1 1 auto; font-size: 14px; }
-.opt .name em { display: block; font-style: normal; font-size: 12px; color: var(--muted); margin-top: 1px; }
-/* Вычеты недоступны по договору подряда — видно, что правило применено */
+.zp .opt:first-of-type { border-top: 0; }
+.zp .opt .name { flex: 1 1 auto; font-size: 14px; }
+.zp .opt .name em { display: block; font-style: normal; font-size: 12px; color: var(--muted); margin-top: 1px; }
+.zp /* Вычеты недоступны по договору подряда — видно, .zp что правило применено */
 .opt.off { opacity: .4; }
-.opt.off input, .opt.off button, .opt.off .toggle { pointer-events: none; }
+.zp .opt.off input, .zp .opt.off button, .zp .opt.off .toggle { pointer-events: none; }
 
-/* Степпер */
+.zp /* Степпер */
 .stepper { display: flex; align-items: center; gap: 2px; background: var(--raised); border-radius: 9px; padding: 2px; }
-.stepper button {
+.zp .stepper button {
   width: 28px; height: 28px; border: 0; border-radius: 7px; cursor: pointer;
   background: transparent; color: var(--ink-2); font: inherit; font-size: 17px; line-height: 1;
 }
-.stepper button:hover { background: var(--surface); color: var(--ink); }
-.stepper input {
+.zp .stepper button:hover { background: var(--surface); color: var(--ink); }
+.zp .stepper input {
   width: 34px; text-align: center; border: 0; background: transparent; color: var(--ink);
   font: inherit; font-weight: 600; padding: 0; -moz-appearance: textfield; appearance: textfield;
 }
-.stepper input::-webkit-outer-spin-button, .stepper input::-webkit-inner-spin-button { -webkit-appearance: none; margin: 0; }
+.zp .stepper input::-webkit-outer-spin-button, .zp .stepper input::-webkit-inner-spin-button { -webkit-appearance: none; margin: 0; }
 
-/* Тумблер */
+.zp /* Тумблер */
 .toggle { position: relative; width: 40px; height: 23px; flex: none; }
-.toggle input { position: absolute; inset: 0; opacity: 0; margin: 0; cursor: pointer; z-index: 2; width: 100%; height: 100%; }
-.toggle span {
+.zp .toggle input { position: absolute; inset: 0; opacity: 0; margin: 0; cursor: pointer; z-index: 2; width: 100%; height: 100%; }
+.zp .toggle span {
   position: absolute; inset: 0; background: var(--line-hard); border-radius: 999px; transition: background .15s;
 }
-.toggle span::after {
+.zp .toggle span::after {
   content: ""; position: absolute; top: 3px; left: 3px; width: 17px; height: 17px;
   background: #fff; border-radius: 50%; transition: transform .15s; box-shadow: 0 1px 2px rgba(0,0,0,.25);
 }
-.toggle input:checked + span { background: var(--accent); }
-.toggle input:checked + span::after { transform: translateX(17px); }
+.zp .toggle input:checked + span { background: var(--accent); }
+.zp .toggle input:checked + span::after { transform: translateX(17px); }
 
-/* Мелкие числовые поля */
+.zp /* Мелкие числовые поля */
 .mini { display: inline-flex; align-items: center; gap: 5px; }
-.mini input {
+.zp .mini input {
   width: 62px; font: inherit; font-size: 14px; text-align: right; color: var(--ink);
   padding: 6px 8px; background: var(--plane); border: 1px solid var(--line-hard); border-radius: 8px;
 }
-.mini .u { color: var(--muted); font-size: 13px; }
-.mini[hidden] { display: none; }
+.zp .mini .u { color: var(--muted); font-size: 13px; }
+.zp .mini[hidden] { display: none; }
 
-/* -------------------------------- Результат -------------------------------- */
+.zp /* -------------------------------- Результат -------------------------------- */
 .hero { text-align: center; padding: 4px 0 16px; }
-.hero .cap { font-size: 11px; text-transform: uppercase; letter-spacing: 0.8px; color: var(--muted); font-weight: 650; }
-.hero .fig { font-size: 52px; font-weight: 660; letter-spacing: -1.5px; line-height: 1.1; margin-top: 6px; }
-.hero .fig small { font-size: 20px; font-weight: 500; color: var(--muted); letter-spacing: 0; }
-.chip {
+.zp .hero .cap { font-size: 11px; text-transform: uppercase; letter-spacing: 0.8px; color: var(--muted); font-weight: 650; }
+.zp .hero .fig { font-size: 52px; font-weight: 660; letter-spacing: -1.5px; line-height: 1.1; margin-top: 6px; }
+.zp .hero .fig small { font-size: 20px; font-weight: 500; color: var(--muted); letter-spacing: 0; }
+.zp .chip {
   display: inline-flex; align-items: center; gap: 7px; margin-top: 12px;
   font-size: 12.5px; padding: 5px 12px; border-radius: 999px;
   background: var(--raised); color: var(--ink-2); text-align: left;
 }
-.chip.ok { color: var(--good); }
-.chip.warn { color: var(--warn); }
-.chip .dotmark { width: 7px; height: 7px; border-radius: 50%; background: currentColor; flex: none; }
+.zp .chip.ok { color: var(--good); }
+.zp .chip.warn { color: var(--warn); }
+.zp .chip .dotmark { width: 7px; height: 7px; border-radius: 50%; background: currentColor; flex: none; }
 
-/* Полоса состава */
+.zp /* Полоса состава */
 .bar-viz { display: flex; gap: 2px; height: 34px; margin: 4px 0 14px; }
-.bar-viz i {
+.zp .bar-viz i {
   display: flex; align-items: center; justify-content: center; min-width: 3px;
   font-style: normal; font-size: 11px; font-weight: 650; color: #fff;
   border-radius: 3px; overflow: hidden;
 }
-.bar-viz i:first-child { border-radius: 7px 3px 3px 7px; }
-.bar-viz i:last-child { border-radius: 3px 7px 7px 3px; }
+.zp .bar-viz i:first-child { border-radius: 7px 3px 3px 7px; }
+.zp .bar-viz i:last-child { border-radius: 3px 7px 7px 3px; }
 
-/* Таблица-легенда */
+.zp /* Таблица-легенда */
 table { width: 100%; border-collapse: collapse; font-size: 14px; }
-td { padding: 8px 0; }
-td.num { text-align: right; white-space: nowrap; font-variant-numeric: tabular-nums; }
-td.pc { text-align: right; white-space: nowrap; width: 52px; color: var(--muted); font-size: 12.5px; font-variant-numeric: tabular-nums; }
-.dot { display: inline-block; width: 10px; height: 10px; border-radius: 3px; margin-right: 9px; vertical-align: -1px; }
-tr.head td { border-bottom: 1px solid var(--line); padding-bottom: 10px; font-weight: 620; }
-tr.foot td { border-top: 1px solid var(--line); padding-top: 11px; font-weight: 650; }
-.muted { color: var(--muted); }
-.small { font-size: 12.5px; }
+.zp td { padding: 8px 0; }
+.zp td.num { text-align: right; white-space: nowrap; font-variant-numeric: tabular-nums; }
+.zp td.pc { text-align: right; white-space: nowrap; width: 52px; color: var(--muted); font-size: 12.5px; font-variant-numeric: tabular-nums; }
+.zp .dot { display: inline-block; width: 10px; height: 10px; border-radius: 3px; margin-right: 9px; vertical-align: -1px; }
+.zp tr.head td { border-bottom: 1px solid var(--line); padding-bottom: 10px; font-weight: 620; }
+.zp tr.foot td { border-top: 1px solid var(--line); padding-top: 11px; font-weight: 650; }
+.zp .muted { color: var(--muted); }
+.zp .small { font-size: 12.5px; }
 
-/* Раскрывающиеся блоки */
+.zp /* Раскрывающиеся блоки */
 details { border-top: 1px solid var(--line); }
-details summary {
+.zp details summary {
   cursor: pointer; list-style: none; padding: 12px 0 12px 20px; position: relative;
   font-size: 13px; color: var(--ink-2); font-weight: 550;
 }
-details summary::-webkit-details-marker { display: none; }
-details summary::before {
+.zp details summary::-webkit-details-marker { display: none; }
+.zp details summary::before {
   content: "›"; position: absolute; left: 4px; top: 11px;
   color: var(--muted); font-size: 15px; transition: transform .15s; display: inline-block;
 }
-details[open] summary::before { transform: rotate(90deg); }
-details summary:hover { color: var(--ink); }
-.details-body { padding: 0 0 14px; font-size: 13.5px; color: var(--ink-2); }
-.details-body p { margin: 0 0 9px; }
-.details-body table { font-size: 13.5px; }
-.details-body td { padding: 6px 0; }
+.zp details[open] summary::before { transform: rotate(90deg); }
+.zp details summary:hover { color: var(--ink); }
+.zp .details-body { padding: 0 0 14px; font-size: 13.5px; color: var(--ink-2); }
+.zp .details-body p { margin: 0 0 9px; }
+.zp .details-body table { font-size: 13.5px; }
+.zp .details-body td { padding: 6px 0; }
 
-.fatal {
+.zp .fatal {
   max-width: 640px; margin: 48px auto; padding: 20px 22px;
   background: var(--surface); border: 1px solid var(--line); border-left: 4px solid #d03b3b;
   border-radius: 12px; font-size: 14.5px; line-height: 1.55;
 }
-.fatal b { display: block; margin-bottom: 8px; font-size: 16px; }
-.fatal p { margin: 0 0 8px; color: var(--ink-2); }
+.zp .fatal b { display: block; margin-bottom: 8px; font-size: 16px; }
+.zp .fatal p { margin: 0 0 8px; color: var(--ink-2); }
 
-.foot-notes { margin-top: 18px; background: var(--surface); border: 1px solid var(--line); border-radius: 14px; padding: 0 18px; }
-.foot-notes details:first-child { border-top: 0; }
+.zp .foot-notes { margin-top: 18px; background: var(--surface); border: 1px solid var(--line); border-radius: 14px; padding: 0 18px; }
+.zp .foot-notes details:first-child { border-top: 0; }
+
+  /* Внутри вкладки калькулятору не нужен собственный фон страницы и её отступы —
+     иначе он рисует прямоугольник поверх фона оболочки. */
+  .zp { background: transparent; padding: 0 0 8px; }
 </style>
+</head>
+<body>
 
+  <nav class="sidebar">
+    <div class="sidebar-title">Рабочее место бухгалтера</div>
+
+    <div class="nav-group-label">Калькуляторы</div>
+    <button class="nav-item active" data-target="calc-payroll">Зарплата: на руки → начислено</button>
+    <!-- Сюда позже добавляются новые калькуляторы тем же способом:
+    <button class="nav-item" data-target="calc-fuel">Топливо (ГСМ)</button>
+    -->
+
+    <div class="nav-group-label">Справочники</div>
+    <button class="nav-item" data-target="ref-headcount">Среднесписочная численность</button>
+    <!-- Пример добавления новой справки:
+    <button class="nav-item" data-target="ref-fuel-norms">Нормы списания ГСМ</button>
+    -->
+  </nav>
+
+  <main class="main">
+
+    <!-- ============ РАЗДЕЛ: Калькулятор зарплаты ============ -->
+    <section class="content-section active" id="calc-payroll">
+      <!-- Калькулятор зарплаты. Свёрстан отдельно от оболочки: собственная шапка,
+           собственная палитра, стили с областью видимости .zp. -->
+      <div class="zp">
 <div class="app">
   <div class="bar">
     <div>
@@ -417,7 +681,1441 @@ details summary:hover { color: var(--ink); }
   </div>
 </div>
 
+      </div>
+    </section>
+
+    <!-- ============ РАЗДЕЛ: Численность работников ============ -->
+    <section class="content-section" id="ref-headcount">
+      <h1>Среднесписочная численность</h1>
+      <div class="subtitle">Загрузите табель из 1С — расчёт по Указаниям № 1 Белстата. Файл никуда не отправляется, всё считается в браузере</div>
+
+      <div class="card">
+        <input type="file" id="file" accept=".xls,.xlsx" class="hidden">
+        <div class="drop" id="drop">
+          <div style="font-size:15px;margin-bottom:4px">Перетащите сюда <b>табель</b> из 1С</div>
+          <div>или нажмите, чтобы выбрать файл — понимаются .xls и .xlsx</div>
+        </div>
+        <div id="file-error"></div>
+      </div>
+
+      <div id="result" class="hidden">
+
+        <div class="card">
+          <h2>Загруженные табели <span class="sub">отчёт заполняется за период, поэтому табелей может быть несколько</span></h2>
+          <div class="table-wrap"><table id="months-table"></table></div>
+        </div>
+
+        <div class="card">
+          <h2>Для отчёта 4-фонд <span class="sub">раздел I, таблица 1 — с начала отчётного года</span></h2>
+          <div class="kpi-row" id="period-kpi"></div>
+          <div id="period-note"></div>
+        </div>
+
+        <div class="card">
+          <h2>Что распознано в файле</h2>
+          <div id="meta"></div>
+          <div id="warnings"></div>
+          <table id="codes-table"></table>
+        </div>
+
+        <div class="card">
+          <h2>Сотрудники и категории <span class="sub">отметьте тех, у кого неполное время установлено по закону</span></h2>
+          <table id="emp-table"></table>
+          <div class="note plain" id="rate-note" style="margin:14px 0 0"></div>
+          <div class="note warn" style="margin:14px 0 0">
+            Неполное рабочее время <b>по соглашению с нанимателем</b> учитывается в среднесписочной численности
+            пропорционально отработанному времени, а <b>по закону</b> (беременные, родитель ребёнка до 14 лет,
+            инвалиды) — целой единицей. В табеле такого признака нет, отметьте вручную.
+          </div>
+        </div>
+
+        <div class="card">
+          <h2>Договоры подряда (ГПД) <span class="sub">в табель не попадают, внесите вручную</span></h2>
+          <div id="gph-rows"></div>
+          <button class="ghost" id="gph-add" type="button">+ Добавить договор</button>
+          <div class="note plain" style="margin:14px 0 0">
+            Работающие по ГПД считаются целыми единицами за каждый календарный день действия договора,
+            знаменатель — календарные дни месяца.
+          </div>
+        </div>
+
+        <div class="card">
+          <h2>Руководитель <span class="sub">для строк 56 и 57 отчёта 4-фонд</span></h2>
+          <select id="director"></select>
+        </div>
+
+        <div class="card">
+          <h2>Результат за месяц <span class="sub" id="result-month"></span></h2>
+          <div class="kpi-row" id="kpi"></div>
+          <table id="detail-table" style="margin-top:18px"></table>
+        </div>
+
+        <div class="card">
+          <h2>Расшифровка <span class="sub">из чего сложился каждый показатель, по каждому сотруднику</span></h2>
+          <div id="breakdown-hint" class="hidden" style="color:var(--text-muted);font-size:12.5px;margin:0 0 10px">
+            Таблица шире экрана — прокрутите её вбок или разверните окно, чтобы увидеть все столбцы.
+          </div>
+          <div class="table-wrap"><table id="breakdown-table"></table></div>
+        </div>
+
+        <div class="card" id="crosscheck-card">
+          <h2>Сверка с подвалом табеля</h2>
+          <div id="crosscheck"></div>
+        </div>
+
+      </div>
+
+      <div class="card">
+        <details>
+          <summary>Методика: какой показатель для чего и чем они различаются</summary>
+          <div class="body">
+            <table>
+              <tr><th>Показатель</th><th>Для чего</th></tr>
+              <tr><td>Списочная численность на дату</td><td>Разовый снимок на день</td></tr>
+              <tr><td>Списочная численность в среднем за период</td><td>База для остальных расчётов</td></tr>
+              <tr><td>Среднесписочная численность (СрСЧ)</td><td>Отчёт 4-фонд</td></tr>
+              <tr><td>Средняя численность внешних совместителей</td><td>Отдельный компонент</td></tr>
+              <tr><td>Средняя численность по ГПД</td><td>Отдельный компонент</td></tr>
+              <tr><td>Средняя численность в целом по организации</td><td>Статус субъекта (микро/малое), право на УСН</td></tr>
+            </table>
+            <p style="margin-top:14px"><b>Ключевое различие СрСЧ и списочной.</b> Сотрудники на неполном времени
+            <b>по собственному соглашению</b> с нанимателем считаются пропорционально отработанному времени, а не целой
+            единицей. Сотрудники на неполном времени <b>по закону</b> (беременные, родитель ребёнка до 14 лет,
+            инвалиды) — целой единицей.</p>
+            <p>Списки исключений в списочной численности и в СрСЧ <b>разные</b>: например, человек на обычном больничном
+            входит в списочную, но не входит в СрСЧ. Это осознанное различие между показателями, не ошибка.</p>
+            <p>Округление — до одного знака после запятой, без исключений, включая СрСЧ.</p>
+          </div>
+        </details>
+      </div>
+    </section>
+
+  </main>
+
 <script>
+"use strict";
+
+/* ========================================================================
+   ЯДРО: разбор .xls от 1С и расчёт численности. Начало.
+   Ниже — только чистые функции, без обращения к DOM: этот кусок целиком
+   вытаскивается тестом test-headcount.js и гоняется в Node.
+   ======================================================================== */
+
+/* ---- CP1251 ----------------------------------------------------------
+   1С пишет BIFF5 без записи CODEPAGE, строки — однобайтовые в CP1251.
+   Диапазон 0x80–0xBF задан списком, кириллица 0xC0–0xFF идёт подряд. */
+const CP1251_HIGH = [
+  0x0402,0x0403,0x201A,0x0453,0x201E,0x2026,0x2020,0x2021,0x20AC,0x2030,0x0409,0x2039,0x040A,0x040C,0x040B,0x040F,
+  0x0452,0x2018,0x2019,0x201C,0x201D,0x2022,0x2013,0x2014,0x0020,0x2122,0x0459,0x203A,0x045A,0x045C,0x045B,0x045F,
+  0x00A0,0x040E,0x045E,0x0408,0x00A4,0x0490,0x00A6,0x00A7,0x0401,0x00A9,0x0404,0x00AB,0x00AC,0x00AD,0x00AE,0x0407,
+  0x00B0,0x00B1,0x0406,0x0456,0x0491,0x00B5,0x00B6,0x00B7,0x0451,0x2116,0x0454,0x00BB,0x0458,0x0405,0x0455,0x0457];
+
+function cp1251(bytes) {
+  let s = "";
+  for (let i = 0; i < bytes.length; i++) {
+    const x = bytes[i];
+    s += x < 0x80 ? String.fromCharCode(x)
+       : x < 0xC0 ? String.fromCharCode(CP1251_HIGH[x - 0x80])
+                  : String.fromCharCode(0x0410 + x - 0xC0);
+  }
+  return s;
+}
+
+/* ---- OLE2 (составной файл): достаём поток Book / Workbook ---- */
+function readOleStream(bytes) {
+  const dv = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+  const sig = [0xD0, 0xCF, 0x11, 0xE0, 0xA1, 0xB1, 0x1A, 0xE1];
+  for (let i = 0; i < 8; i++) {
+    if (bytes[i] !== sig[i]) throw new Error("Это не файл Excel 97-2003 (.xls). Выгрузите табель из 1С в формате Excel.");
+  }
+  const u16 = (o) => dv.getUint16(o, true), u32 = (o) => dv.getUint32(o, true);
+  const sectorSize = 1 << u16(30), miniSize = 1 << u16(32), cutoff = u32(56);
+  const secOff = (s) => 512 + s * sectorSize;
+
+  // DIFAT -> FAT
+  const fatSectors = [];
+  for (let i = 0; i < 109; i++) { const s = u32(76 + i * 4); if (s === 0xFFFFFFFF) break; fatSectors.push(s); }
+  let difat = u32(68), guard = 0;
+  while (difat !== 0xFFFFFFFE && difat !== 0xFFFFFFFF && guard++ < 1000) {
+    const base = secOff(difat), n = sectorSize / 4 - 1;
+    for (let i = 0; i < n; i++) { const s = u32(base + i * 4); if (s !== 0xFFFFFFFF) fatSectors.push(s); }
+    difat = u32(base + n * 4);
+  }
+  const FAT = [];
+  fatSectors.forEach((s) => { for (let i = 0; i < sectorSize / 4; i++) FAT.push(u32(secOff(s) + i * 4)); });
+
+  const concat = (parts, size) => {
+    let total = 0; parts.forEach((p) => { total += p.length; });
+    const out = new Uint8Array(total); let at = 0;
+    parts.forEach((p) => { out.set(p, at); at += p.length; });
+    return size ? out.subarray(0, size) : out;
+  };
+  const readChain = (start, size) => {
+    const parts = []; let s = start, g = 0;
+    while (s !== 0xFFFFFFFE && s !== 0xFFFFFFFF && g++ < 100000) {
+      parts.push(bytes.subarray(secOff(s), secOff(s) + sectorSize)); s = FAT[s];
+    }
+    return concat(parts, size);
+  };
+
+  const dir = readChain(u32(48));
+  let target = null, root = null;
+  for (let p = 0; p + 128 <= dir.length; p += 128) {
+    const nameLen = dir[p + 64] | (dir[p + 65] << 8);
+    if (nameLen < 2) continue;
+    let name = "";
+    for (let i = 0; i < nameLen - 2; i += 2) name += String.fromCharCode(dir[p + i] | (dir[p + i + 1] << 8));
+    const type = dir[p + 66];
+    const entry = { name: name, type: type,
+      start: dir[p + 116] | (dir[p + 117] << 8) | (dir[p + 118] << 16) | (dir[p + 119] * 0x1000000),
+      size: dir[p + 120] | (dir[p + 121] << 8) | (dir[p + 122] << 16) | (dir[p + 123] * 0x1000000) };
+    if (type === 5) root = entry;
+    if (type === 2 && /^(Book|Workbook)$/i.test(name)) target = entry;
+  }
+  if (!target) throw new Error("Внутри файла не найден лист Excel — похоже, это не табель из 1С.");
+
+  if (target.size < cutoff && root) {                    // маленькие потоки лежат в mini-FAT
+    const miniStream = readChain(root.start, root.size);
+    const mf = readChain(u32(60));
+    const miniFat = [];
+    for (let i = 0; i + 4 <= mf.length; i += 4) miniFat.push(mf[i] | (mf[i+1] << 8) | (mf[i+2] << 16) | (mf[i+3] * 0x1000000));
+    const parts = []; let s = target.start, g = 0;
+    while (s !== 0xFFFFFFFE && s !== 0xFFFFFFFF && g++ < 100000) {
+      parts.push(miniStream.subarray(s * miniSize, (s + 1) * miniSize)); s = miniFat[s];
+    }
+    return concat(parts, target.size);
+  }
+  return readChain(target.start, target.size);
+}
+
+/* ---- BIFF: ячейки первого листа ----
+   Поддержаны BIFF5 (то, что отдаёт 1С) и BIFF8 (если файл пересохранили в Excel). */
+function readBiffCells(stream) {
+  const dv = new DataView(stream.buffer, stream.byteOffset, stream.byteLength);
+  const u16 = (o) => dv.getUint16(o, true);
+  const i32 = (o) => dv.getInt32(o, true);
+  const cells = {};
+  let maxRow = 0, maxCol = 0, biff8 = false, sst = [], inSheet = 0;
+
+  const put = (r, c, v) => {
+    if (v === "" || v === null || v === undefined) return;
+    cells[r + ":" + c] = v;
+    if (r > maxRow) maxRow = r;
+    if (c > maxCol) maxCol = c;
+  };
+  const rk = (v) => {
+    const isInt = v & 2, div100 = v & 1;
+    let out;
+    if (isInt) out = v >> 2;
+    else {
+      const b = new ArrayBuffer(8), d2 = new DataView(b);
+      d2.setUint32(4, v & 0xFFFFFFFC, true);
+      out = d2.getFloat64(0, true);
+    }
+    return div100 ? out / 100 : out;
+  };
+  // Строка BIFF8 (XLUnicodeString): длина 2 байта, флаг сжатия, дальше данные
+  const biff8Str = (o, lenBytes) => {
+    const cch = lenBytes === 1 ? stream[o] : u16(o);
+    const grbit = stream[o + lenBytes];
+    const compressed = (grbit & 1) === 0;
+    const start = o + lenBytes + 1;
+    let s = "";
+    if (compressed) { for (let i = 0; i < cch; i++) s += String.fromCharCode(stream[start + i]); }
+    else { for (let i = 0; i < cch; i++) s += String.fromCharCode(u16(start + i * 2)); }
+    return { text: s, next: start + (compressed ? cch : cch * 2) };
+  };
+
+  let p = 0;
+  while (p + 4 <= stream.length) {
+    const type = u16(p), len = u16(p + 2), d = p + 4;
+    if (type === 0x0809) {                                  // BOF
+      const ver = u16(d);
+      if (ver >= 0x0600) biff8 = true;
+      const sub = len >= 4 ? u16(d + 2) : 0;
+      if (sub === 0x0010) inSheet++;                        // начало листа
+    } else if (type === 0x00FC && biff8) {                  // SST
+      let q = d + 8;
+      const total = i32(d + 4);
+      for (let i = 0; i < total && q < d + len; i++) {
+        const s = biff8Str(q, 2);
+        sst.push(s.text); q = s.next;
+      }
+    } else if (type === 0x0204 || type === 0x00D6) {         // LABEL / RSTRING
+      const r = u16(d), c = u16(d + 2);
+      // В BIFF8 после длины идёт байт-флаг сжатия, в BIFF5 сразу текст. Версия из BOF
+      // тут ненадёжна: Excel, пересохраняя выгрузку 1С, пишет BIFF5-записи под шапкой
+      // BIFF8 (у файла два BOF — 0x0500 у книги и 0x0600 у листа). Поэтому смотрим на
+      // сам байт: флаг сжатия — это 0..15, текст с таких байтов не начинается.
+      if (biff8 && stream[d + 8] < 0x10) put(r, c, biff8Str(d + 6, 2).text);
+      else {
+        const cch = u16(d + 6);
+        put(r, c, cp1251(stream.subarray(d + 8, d + 8 + cch)));
+      }
+    } else if (type === 0x00FD) {                            // LABELSST (BIFF8)
+      put(u16(d), u16(d + 2), sst[i32(d + 6)] || "");
+    } else if (type === 0x0203) {                            // NUMBER
+      put(u16(d), u16(d + 2), dv.getFloat64(d + 6, true));
+    } else if (type === 0x027E) {                            // RK
+      put(u16(d), u16(d + 2), rk(i32(d + 6)));
+    } else if (type === 0x00BD) {                            // MULRK
+      const r = u16(d), c0 = u16(d + 2), n = (len - 6) / 6;
+      for (let i = 0; i < n; i++) put(r, c0 + i, rk(i32(d + 4 + i * 6 + 2)));
+    } else if (type === 0x0006) {                            // FORMULA — берём числовой результат
+      const r = u16(d), c = u16(d + 2);
+      const isText = stream[d + 12] === 0xFF && stream[d + 13] === 0xFF;
+      if (!isText) put(r, c, dv.getFloat64(d + 6, true));
+    } else if (type === 0x0207) {                            // STRING — результат формулы-строки
+      // пропускаем: в табеле 1С формул-строк нет
+    }
+    p += 4 + len;
+    if (inSheet > 1) break;                                  // читаем только первый лист
+  }
+  return { cells: cells, maxRow: maxRow, maxCol: maxCol, biff8: biff8 };
+}
+
+/* ========================= Формат .xlsx =========================
+   .xlsx — это zip-архив с XML внутри, устроен совсем иначе, чем .xls.
+   Библиотек нет, поэтому распаковка написана руками: разбор оглавления zip
+   и распаковщик deflate (RFC 1951). Сделан синхронным, чтобы и страница,
+   и тесты в Node работали одним и тем же кодом. */
+
+function inflateRaw(data) {
+  let pos = 0, bit = 0;
+  const out = [];
+  const bits = (n) => {
+    let v = 0;
+    for (let i = 0; i < n; i++) {
+      v |= ((data[pos] >> bit) & 1) << i;
+      if (++bit === 8) { bit = 0; pos++; }
+    }
+    return v;
+  };
+  // Каноническое дерево Хаффмана: по длинам кодов строим таблицу «код -> символ»
+  const build = (lengths) => {
+    const maxLen = Math.max.apply(null, lengths);
+    const blCount = new Array(maxLen + 1).fill(0);
+    lengths.forEach((l) => { if (l) blCount[l]++; });
+    const next = new Array(maxLen + 1).fill(0);
+    let code = 0;
+    for (let i = 1; i <= maxLen; i++) { code = (code + blCount[i - 1]) << 1; next[i] = code; }
+    const map = {};
+    lengths.forEach((l, sym) => { if (l) map[l + ":" + (next[l]++)] = sym; });
+    return { map: map, maxLen: maxLen };
+  };
+  const decode = (tree) => {
+    let code = 0;
+    for (let len = 1; len <= tree.maxLen; len++) {
+      code = (code << 1) | bits(1);
+      const s = tree.map[len + ":" + code];
+      if (s !== undefined) return s;
+    }
+    throw new Error("Файл .xlsx повреждён: не удалось распаковать содержимое.");
+  };
+
+  const LEN_BASE = [3,4,5,6,7,8,9,10,11,13,15,17,19,23,27,31,35,43,51,59,67,83,99,115,131,163,195,227,258];
+  const LEN_EXTRA = [0,0,0,0,0,0,0,0,1,1,1,1,2,2,2,2,3,3,3,3,4,4,4,4,5,5,5,5,0];
+  const DIST_BASE = [1,2,3,4,5,7,9,13,17,25,33,49,65,97,129,193,257,385,513,769,1025,1537,2049,3073,4097,6145,
+                     8193,12289,16385,24577];
+  const DIST_EXTRA = [0,0,0,0,1,1,2,2,3,3,4,4,5,5,6,6,7,7,8,8,9,9,10,10,11,11,12,12,13,13];
+  const ORDER = [16,17,18,0,8,7,9,6,10,5,11,4,12,3,13,2,14,1,15];
+
+  let fixedLit = null, fixedDist = null;
+  for (let guard = 0; guard < 100000; guard++) {
+    const last = bits(1), type = bits(2);
+    if (type === 0) {                                   // без сжатия
+      if (bit) { bit = 0; pos++; }
+      const len = data[pos] | (data[pos + 1] << 8);
+      pos += 4;
+      for (let i = 0; i < len; i++) out.push(data[pos++]);
+    } else {
+      let lit, dist;
+      if (type === 1) {                                 // фиксированные деревья
+        if (!fixedLit) {
+          const l = new Array(288);
+          for (let i = 0; i < 288; i++) l[i] = i < 144 ? 8 : i < 256 ? 9 : i < 280 ? 7 : 8;
+          fixedLit = build(l);
+          fixedDist = build(new Array(30).fill(5));
+        }
+        lit = fixedLit; dist = fixedDist;
+      } else if (type === 2) {                          // динамические деревья
+        const hlit = bits(5) + 257, hdist = bits(5) + 1, hclen = bits(4) + 4;
+        const clen = new Array(19).fill(0);
+        for (let i = 0; i < hclen; i++) clen[ORDER[i]] = bits(3);
+        const clTree = build(clen);
+        const lens = [];
+        while (lens.length < hlit + hdist) {
+          const sym = decode(clTree);
+          if (sym < 16) lens.push(sym);
+          else if (sym === 16) { const p = lens[lens.length - 1], n = bits(2) + 3; for (let i = 0; i < n; i++) lens.push(p); }
+          else if (sym === 17) { const n = bits(3) + 3; for (let i = 0; i < n; i++) lens.push(0); }
+          else { const n = bits(7) + 11; for (let i = 0; i < n; i++) lens.push(0); }
+        }
+        lit = build(lens.slice(0, hlit));
+        dist = build(lens.slice(hlit));
+      } else {
+        throw new Error("Файл .xlsx повреждён: неизвестный способ сжатия.");
+      }
+      for (;;) {
+        const sym = decode(lit);
+        if (sym === 256) break;
+        if (sym < 256) { out.push(sym); continue; }
+        const li = sym - 257;
+        const length = LEN_BASE[li] + bits(LEN_EXTRA[li]);
+        const di = decode(dist);
+        const distance = DIST_BASE[di] + bits(DIST_EXTRA[di]);
+        const start = out.length - distance;
+        for (let i = 0; i < length; i++) out.push(out[start + i]);
+      }
+    }
+    if (last) break;
+  }
+  return new Uint8Array(out);
+}
+
+// Читаем zip: возвращаем { имя файла -> содержимое (строка UTF-8) }
+function readZip(bytes) {
+  const dv = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+  const files = {};
+  // Идём по локальным заголовкам: сигнатура PK\x03\x04
+  for (let p = 0; p + 30 <= bytes.length; ) {
+    if (dv.getUint32(p, true) !== 0x04034b50) { p++; continue; }
+    const method = dv.getUint16(p + 8, true);
+    let compSize = dv.getUint32(p + 18, true);
+    const nameLen = dv.getUint16(p + 26, true), extraLen = dv.getUint16(p + 28, true);
+    let name = "";
+    for (let i = 0; i < nameLen; i++) name += String.fromCharCode(bytes[p + 30 + i]);
+    const dataStart = p + 30 + nameLen + extraLen;
+    if (compSize === 0 && (dv.getUint16(p + 6, true) & 8)) {
+      // размер вынесен в дескриптор после данных — ищем следующую сигнатуру
+      let q = dataStart;
+      while (q + 4 <= bytes.length && dv.getUint32(q, true) !== 0x08074b50) q++;
+      compSize = q - dataStart;
+    }
+    const raw = bytes.subarray(dataStart, dataStart + compSize);
+    try {
+      const content = method === 0 ? raw : inflateRaw(raw);
+      files[name] = utf8(content);
+    } catch (err) { /* пропускаем нечитаемую запись: нужные нам файлы обычно читаются */ }
+    p = dataStart + compSize;
+  }
+  return files;
+}
+
+function utf8(bytes) {
+  let s = "";
+  for (let i = 0; i < bytes.length; i++) {
+    const c = bytes[i];
+    if (c < 0x80) s += String.fromCharCode(c);
+    else if (c < 0xE0) { s += String.fromCharCode(((c & 0x1F) << 6) | (bytes[++i] & 0x3F)); }
+    else if (c < 0xF0) { s += String.fromCharCode(((c & 0x0F) << 12) | ((bytes[++i] & 0x3F) << 6) | (bytes[++i] & 0x3F)); }
+    else {
+      const cp = ((c & 0x07) << 18) | ((bytes[++i] & 0x3F) << 12) | ((bytes[++i] & 0x3F) << 6) | (bytes[++i] & 0x3F);
+      const v = cp - 0x10000;
+      s += String.fromCharCode(0xD800 + (v >> 10), 0xDC00 + (v & 0x3FF));
+    }
+  }
+  return s;
+}
+
+const XML_ENT = { lt: "<", gt: ">", amp: "&", quot: '"', apos: "'" };
+function unxml(s) {
+  return s.replace(/&(#x?[0-9a-fA-F]+|\w+);/g, (m, e) => {
+    if (e[0] === "#") return String.fromCharCode(e[1] === "x" ? parseInt(e.slice(2), 16) : parseInt(e.slice(1), 10));
+    return XML_ENT[e] !== undefined ? XML_ENT[e] : m;
+  });
+}
+
+// Ячейки первого листа .xlsx — в том же виде, что отдаёт readBiffCells
+function readXlsxCells(bytes) {
+  const files = readZip(bytes);
+  const sheetName = Object.keys(files).find((n) => /^xl\/worksheets\/sheet1\.xml$/i.test(n)) ||
+                    Object.keys(files).find((n) => /^xl\/worksheets\/.*\.xml$/i.test(n));
+  if (!sheetName) throw new Error("Внутри .xlsx не найден лист с данными.");
+
+  const shared = [];
+  const ss = files["xl/sharedStrings.xml"];
+  if (ss) {
+    ss.split(/<si[\s>]/).slice(1).forEach((si) => {
+      let text = "";
+      si.replace(/<t[^>]*>([\s\S]*?)<\/t>/g, (m, t) => { text += unxml(t); return m; });
+      shared.push(text);
+    });
+  }
+
+  const cells = {};
+  let maxRow = 0, maxCol = 0;
+  const sheet = files[sheetName];
+  const colOf = (ref) => {
+    let n = 0;
+    for (let i = 0; i < ref.length && ref[i] >= "A"; i++) n = n * 26 + (ref.charCodeAt(i) - 64);
+    return n - 1;
+  };
+  sheet.replace(/<c\s([^>]*?)(\/>|>([\s\S]*?)<\/c>)/g, (m, attrs, close, body) => {
+    const ref = (attrs.match(/r="([A-Z]+\d+)"/) || [])[1];
+    if (!ref) return m;
+    const type = (attrs.match(/t="([^"]+)"/) || [])[1];
+    const row = parseInt(ref.replace(/[A-Z]+/g, ""), 10) - 1, col = colOf(ref);
+    let value = null;
+    if (body) {
+      if (type === "inlineStr") {
+        let t = ""; body.replace(/<t[^>]*>([\s\S]*?)<\/t>/g, (mm, x) => { t += unxml(x); return mm; });
+        value = t;
+      } else {
+        const v = (body.match(/<v>([\s\S]*?)<\/v>/) || [])[1];
+        if (v !== undefined) {
+          if (type === "s") value = shared[parseInt(v, 10)];
+          else if (type === "str" || type === "e") value = unxml(v);
+          else value = parseFloat(v);
+        }
+      }
+    }
+    if (value !== null && value !== undefined && value !== "") {
+      cells[row + ":" + col] = value;
+      if (row > maxRow) maxRow = row;
+      if (col > maxCol) maxCol = col;
+    }
+    return m;
+  });
+  return { cells: cells, maxRow: maxRow, maxCol: maxCol, biff8: false, xlsx: true };
+}
+
+/* Единая точка входа: сам определяет формат по первым байтам */
+function readSpreadsheet(bytes) {
+  if (bytes[0] === 0x50 && bytes[1] === 0x4B) return readXlsxCells(bytes);        // PK — zip, значит .xlsx
+  return readBiffCells(readOleStream(bytes));                                     // иначе .xls
+}
+
+/* ---- Разбор табеля: шапка, метаданные, сотрудники ---- */
+function parseTabel(sheet) {
+  const cells = sheet.cells;
+  const txt = (r, c) => {
+    const v = cells[r + ":" + c];
+    if (v === undefined || v === null) return "";
+    return (typeof v === "number" ? String(v) : v).trim();
+  };
+
+  // Метаданные: период и количество дней
+  let period = "", calDays = 0, workDays = 0, footer = "";
+  for (let r = 0; r <= sheet.maxRow; r++) {
+    for (let c = 0; c <= sheet.maxCol; c++) {
+      const t = txt(r, c);
+      if (!t) continue;
+      // «за Июль 2026 г.» (1С) и «за Июль 2026 года» (другая форма табеля)
+      if (/^за\s+\S+\s+\d{4}\s*(г\.|года)/i.test(t)) {
+        period = t.replace(/^за\s+/i, "").replace(/\s*(г\.|года)\s*$/i, "");
+      }
+      const m1 = t.match(/дней\s+в\s+месяце\s*:?\s*(\d+)/i);
+      if (m1) calDays = +m1[1];
+      const m2 = t.match(/рабочих\s+дней\s*:?\s*(\d+)/i);
+      if (m2) workDays = +m2[1];
+      if (/численность\s*:/i.test(t)) footer = t;
+    }
+  }
+
+  // Шапка: строка, где встречается «Фамилия»
+  let hdr = -1, colFio = -1, colPost = -1, colWorkDays = -1, colWorkHours = -1, colNorm = -1;
+  const dayCols = [];
+  for (let r = 0; r <= sheet.maxRow && hdr < 0; r++) {
+    for (let c = 0; c <= sheet.maxCol; c++) {
+      if (/^фамили/i.test(txt(r, c))) { hdr = r; colFio = c; break; }
+    }
+  }
+  if (hdr < 0) throw new Error("В файле не найдена шапка табеля (столбец «Фамилия, имя, отчество»).");
+
+  for (let c = 0; c <= sheet.maxCol; c++) {
+    const t = txt(hdr, c);
+    // «Должность» (1С) и «Профессия, должность» (другая форма)
+    if (colPost < 0 && /должност/i.test(t)) colPost = c;
+    else if (/^раб\.?\s*дн/i.test(t)) colWorkDays = c;
+    else if (/^раб\.?\s*час/i.test(t)) colWorkHours = c;
+    else if (/^часов[ая]{2}\s*норма/i.test(t)) colNorm = c;
+    else if (/^\d{1,2}$/.test(t) && +t >= 1 && +t <= 31 && c > colPost && colPost >= 0) dayCols.push(c);
+  }
+  if (!dayCols.length) throw new Error("В шапке табеля не найдены столбцы с днями месяца.");
+  if (!calDays) calDays = dayCols.length;
+
+  // Другая форма табеля: вместо «Часовая норма» — группа «Время по норме» с подзаголовками
+  // «Дни» и «Часы» строкой ниже. Ищем нужный столбец внутри группы.
+  if (colNorm < 0 || colWorkHours < 0) {
+    const groupAt = (re) => {
+      for (let c = 0; c <= sheet.maxCol; c++) if (re.test(txt(hdr, c))) return c;
+      return -1;
+    };
+    const subColumn = (from, re) => {
+      for (let r = hdr; r <= hdr + 3; r++) {
+        for (let c = from; c <= Math.min(from + 2, sheet.maxCol); c++) if (re.test(txt(r, c))) return c;
+      }
+      return -1;
+    };
+    // \w кириллицу не покрывает — только явные диапазоны
+    const normGroup = groupAt(/врем[а-яё]*\s+по\s+норме|^норма([\s,]|$)/i);
+    const workGroup = groupAt(/рабоч[а-яё]*\s+время/i);
+    if (colNorm < 0 && normGroup >= 0) {
+      colNorm = subColumn(normGroup, /^час/i);
+      if (!workDays) {
+        const nd = subColumn(normGroup, /^дн/i);
+        if (nd >= 0) {
+          for (let r = hdr + 1; r <= sheet.maxRow; r++) {
+            const v = parseFloat(String(cells[r + ":" + nd] || "").toString().replace(",", "."));
+            if (isFinite(v) && v > workDays && v <= 31) workDays = v;
+          }
+        }
+      }
+    }
+    if (colWorkHours < 0 && workGroup >= 0) colWorkHours = subColumn(workGroup, /^час/i);
+    if (colWorkDays < 0 && workGroup >= 0) colWorkDays = subColumn(workGroup, /^дн/i);
+  }
+
+  // Сотрудники
+  const employees = [];
+  const num = (r, c) => {
+    if (c < 0) return 0;
+    const v = cells[r + ":" + c];
+    if (typeof v === "number") return v;
+    const f = parseFloat(String(v || "").replace(",", "."));
+    return isFinite(f) ? f : 0;
+  };
+  for (let r = hdr + 1; r <= sheet.maxRow; r++) {
+    const fio = txt(r, colFio);
+    if (!fio) continue;
+    if (/численность|табель\s+состав|итого/i.test(fio)) break;
+    const days = dayCols.map((c) => txt(r, c));
+    employees.push({
+      fio: fio,
+      post: txt(r, colPost),
+      days: days,
+      workedDays: num(r, colWorkDays),
+      workedHours: num(r, colWorkHours),
+      normHours: num(r, colNorm)
+    });
+  }
+  if (!employees.length) throw new Error("В табеле не найдено ни одного сотрудника.");
+
+  return { period: period, calDays: calDays, workDays: workDays,
+           employees: employees, footer: footer, dayCount: dayCols.length };
+}
+
+/* ---- Классификация дня по коду ---- */
+function classifyDay(text, config) {
+  let t = (text || "").trim();
+  if (t === "") return { kind: "none" };
+  // Уволенного 1С 8 рисует прочерками, и рисует по-разному («-», «--», тире).
+  // Приводим к одному виду, а что с ним делать — как и у всех кодов, написано в справочнике.
+  if (/^[-–—]+$/.test(t)) t = "--";
+  if (/^\d+([.,]\d+)?$/.test(t)) {
+    return { kind: "hours", hours: parseFloat(t.replace(",", ".")), list: true, srsch: true, avg: true };
+  }
+  const c = config["коды"][t] || config["коды"][t.toUpperCase()];
+  if (!c) return { kind: "unknown", code: t };
+  return { kind: "code", code: t, list: !!c["списочная"], srsch: !!c["срсч"], avg: !!c["средняя"] };
+}
+
+/* ---- Ставка сотрудника ----
+   В табеле есть только «Часовая норма» — она уже умножена на ставку, а полная норма
+   зависит от длины рабочей недели и в одном табеле бывает разной. В июле 2026
+   встретились три: 175 ч (40-часовая неделя), 168,4 ч (38,5 ч — медсёстры)
+   и 144,2 ч (33 ч — врачи-стоматологи). То есть 168,4 — это ЦЕЛАЯ ставка медсестры,
+   а не 0,96 от нормы администратора.
+
+   Поэтому кандидатами в полные нормы берём все нормы, встретившиеся в этом табеле,
+   и для каждого сотрудника выбираем САМУЮ БОЛЬШУЮ, при которой доля получается
+   «круглой»: 87,5 / 175 = 0,5 (берём), 168,4 / 175 = 0,962 (не круглая, отбрасываем)
+   -> 168,4 / 168,4 = 1.
+
+   Это всё равно догадка: ставка показывается в интерфейсе и правится руками. */
+const NICE_RATES = [0.1, 0.125, 0.2, 0.25, 1 / 3, 0.4, 0.5, 0.6, 2 / 3, 0.75, 0.8, 1];
+const RATE_TOLERANCE = 0.02;
+
+// Ближайшая круглая доля, если она достаточно близко; иначе null
+function niceRate(x) {
+  let best = null, dist = RATE_TOLERANCE;
+  NICE_RATES.forEach((n) => {
+    const d = Math.abs(n - x);
+    if (d <= dist) { dist = d; best = n; }
+  });
+  return best;
+}
+
+// Оставлено для совместимости и тестов: подтягивание к круглой доле от одной нормы
+function snapRate(x) {
+  const n = niceRate(x);
+  return n === null ? x : n;
+}
+
+/* Длины рабочей недели из ТК РБ, которые встречаются в табелях: 40 — обычная,
+   38,5 и 36 — сокращённая по условиям труда, 35 и 23 — несовершеннолетние
+   (16–18 и 14–16 лет), 33 — врачи-стоматологи. Целая ставка на такой неделе —
+   это НЕ целая ставка на сорокачасовой: 168,4 ч медсестры и 144,2 ч стоматолога
+   в табеле «Мудрый зуб» — каждая единица, а не 0,96 и 0,82.
+
+   В табеле нужной нормы может не быть вообще: у несовершеннолетних хореографов
+   «Дэнс-Студио» стоит 38,25 ч — это 0,25 ставки от 35-часовой недели (153,1 ч),
+   а полных 153,1 ч в том табеле нет ни у кого. Поэтому кандидаты в полные нормы —
+   это и нормы из табеля, и норма самой длинной недели, пересчитанная на короткие. */
+const WEEK_HOURS = [40, 38.5, 36, 35, 33, 23];
+
+function fullNormCandidates(norms) {
+  const out = norms.slice();                            // отсортированы по убыванию
+  const maxNorm = out.length ? out[0] : 0;
+  WEEK_HOURS.forEach((w) => {
+    const n = maxNorm * w / 40;
+    if (n > 0 && !out.some((x) => Math.abs(x - n) < 0.5)) out.push(n);
+  });
+  return out.sort((a, b) => b - a);
+}
+
+/* Ставка = норма ÷ полная норма, и кандидатов в полную норму несколько.
+
+   Сначала ищем попадание в точку (промах меньше 0,005) от самой большой нормы вниз,
+   и только потом — попадание по грубому допуску. Порядок именно такой из-за
+   несовершеннолетних: 38,25 / 175 = 0,2186 промахивается мимо 0,2 на 0,019 и по
+   грубому допуску прошло бы, а 38,25 / 153,1 = 0,2499 — это ровно 0,25.
+
+   Делить на собственную норму (доля = 1) можно только последним: иначе любой
+   сотрудник оказался бы целой ставкой. */
+const RATE_EXACT = 0.005;
+
+function deriveRate(normHours, candidates) {
+  if (!normHours) return 1;
+  const pick = (limit) => {
+    for (let i = 0; i < candidates.length; i++) {        // отсортированы по убыванию
+      if (!(candidates[i] > 0)) continue;
+      const raw = normHours / candidates[i];
+      const n = niceRate(raw);
+      if (n !== null && Math.abs(raw - n) <= limit) return n;
+    }
+    return null;
+  };
+  const exact = pick(RATE_EXACT);
+  if (exact !== null) return exact;
+  const loose = pick(RATE_TOLERANCE);
+  return loose !== null ? loose : snapRate(normHours / candidates[0]);
+}
+
+/* Ключ человека: одна и та же фамилия в разных строках табеля пишется то со звёздочкой,
+   то с лишним пробелом. Сравниваем по нормализованному виду, иначе один человек
+   распадётся на двух. */
+function fioKey(fio) {
+  return String(fio || "").replace(/\*/g, "").replace(/\s+/g, " ").trim().toLowerCase();
+}
+
+/* ---- Разметка сотрудников: кто как учитывается ---- */
+function classifyEmployees(tab, config) {
+  const norms = [];
+  tab.employees.forEach((e) => { if (e.normHours > 0 && norms.indexOf(e.normHours) < 0) norms.push(e.normHours); });
+  norms.sort((a, b) => b - a);
+  const candidates = fullNormCandidates(norms);
+  const fullNorm = norms.length ? norms[0] : 0;
+  const unknown = {};
+  const list = tab.employees.map((e, idx) => {
+    let daysInList = 0, daysInSrsch = 0, daysInAvg = 0, hoursSrsch = 0, unknownDays = 0;
+    const statuses = e.days.map((d) => {
+      const s = classifyDay(d, config);
+      if (s.kind === "unknown") {
+        unknownDays++;
+        unknown[s.code] = (unknown[s.code] || 0) + 1;
+      } else if (s.kind !== "none") {
+        if (s.list) daysInList++;
+        if (s.avg) daysInAvg++;
+        if (s.srsch) { daysInSrsch++; if (s.kind === "hours") hoursSrsch += s.hours; }
+      }
+      return s;
+    });
+    // Внутренний совместитель — вторая должность того же человека, а не второй человек.
+    // Проверяется раньше внешнего: «(Внутренний совместитель)» не должен попасть во внешние.
+    const isInner = /внутренн[а-яё]*\s+совместител/i.test(e.post);
+    // В табелях 1С внешний совместитель помечен словом в должности (иногда сокращённо
+    // «совм.»), в другой форме — звёздочкой у фамилии (внизу такого табеля стоит
+    // сноска «* - совместитель»).
+    const isSovmestitel = !isInner &&
+      (/совместител/i.test(e.post) || /совм\./i.test(e.post) || /\*/.test(e.fio) || /\*/.test(e.post));
+    const rateRaw = fullNorm > 0 ? e.normHours / fullNorm : 1;
+    const rate = deriveRate(e.normHours, candidates);
+    return {
+      idx: idx, fio: e.fio, post: e.post,
+      normHours: e.normHours, workedHours: e.workedHours,
+      rateRaw: rateRaw, rate: rate,
+      isSovmestitel: isSovmestitel, isInner: isInner,
+      isPartTime: rate < 1,
+      daysInList: daysInList, daysInSrsch: daysInSrsch, daysInAvg: daysInAvg,
+      hoursSrsch: hoursSrsch, unknownDays: unknownDays, statuses: statuses
+    };
+  });
+
+  // Одно и то же ФИО в двух строках — это один человек на двух должностях, а не два
+  // человека и не внешний совместитель. Вторая и следующие строки идут внутренним
+  // совместительством, даже если в табеле это ничем не помечено.
+  const firstRow = {};
+  list.forEach((e) => {
+    const key = fioKey(e.fio);
+    if (firstRow[key] === undefined) { firstRow[key] = e.idx; return; }
+    e.isInner = true;
+    e.isSovmestitel = false;
+    // Раз человек занимает здесь две должности, он работает у этого нанимателя,
+    // а значит и первая его строка — не внешнее совместительство.
+    list[firstRow[key]].isSovmestitel = false;
+  });
+
+  return { employees: list, fullNorm: fullNorm, norms: norms, unknownCodes: unknown };
+}
+
+/* ---- Расчёт показателей ----
+   Три показателя считаются ПО-РАЗНОМУ, и это главное, что нужно помнить:
+
+     Списочная      — ЛЮДИ, целыми единицами. Внутренний совместитель — один человек,
+                      а не два. Внешние совместители не входят. Декретчики входят.
+     Среднесписочная — СТАВКИ, а не люди и не отработанные часы. Обе должности
+                      внутреннего совместителя складываются. Декретчики не входят.
+     Средняя        — списочная (людьми) + внешние совместители по ставке + ГПД.
+
+   Проверено на табеле ООО «ЛилиДент» за июль 2026: 4 / 2,5 / 4,8 — сходится с расчётом
+   бухгалтера. Считать среднесписочную по фактически отработанным часам НЕЛЬЗЯ:
+   директор в отпуске отработал 71 ч из 175, но считается как целая ставка. */
+/* Округление до одного знака, «половина вверх».
+   Просто Math.round(x * 10) здесь ненадёжен: 0,1 + 0,25 + 0,5 хранится как
+   0,84999999999999998, и результат зависит от случайностей двоичного представления.
+   Поэтому сначала снимаем мусор в далёких разрядах, потом округляем. */
+function round1(x) {
+  const scaled = Math.round(x * 1e10) / 1e9;      // x * 10 без хвоста double
+  return Math.round(scaled) / 10;
+}
+
+function computeHeadcount(tab, marked, config, opts) {
+  const calDays = tab.calDays;
+  opts = opts || {};
+  const byLaw = opts.byLaw || {};              // idx -> true: неполное время по закону, считать целой единицей
+  const rateOverride = opts.rates || {};       // idx -> ставка, поправленная бухгалтером
+  const gphContracts = opts.gph || [];         // [{from, to}] — числа месяца
+  const directorIdx = opts.directorIdx;
+
+  const r1 = round1;
+  // Формулы в расшифровке пишутся коротко: общий знаменатель (календарные дни)
+  // вынесен в шапку таблицы, иначе «÷ 31 кал. дн.» повторяется в каждой ячейке
+  // и распирает таблицу.
+  const nr = (x) => String(Math.round(x * 1000) / 1000).replace(".", ",");
+  const rateOf = (e) => {
+    if (byLaw[e.idx]) return 1;                                 // неполное время по закону — целой единицей
+    const o = rateOverride[e.idx];
+    return (typeof o === "number" && isFinite(o) && o > 0) ? o : e.rate;
+  };
+  // По руководителю (строка 56) складываются обе его должности, если их две.
+  const dirFio = directorIdx >= 0 && marked.employees[directorIdx] ? fioKey(marked.employees[directorIdx].fio) : null;
+
+  let srsch = 0, sovm = 0, dirSrsch = 0;
+  const persons = {};                                           // ФИО -> {списочная, средняя} в днях, по человеку
+  const rows = [];                                              // расшифровка: вклад каждой строки табеля
+
+  marked.employees.forEach((e) => {
+    const st = rateOf(e);
+    if (e.isSovmestitel) {
+      // Внешние совместители: отдельный показатель, по ставке и по дням среднесписочной —
+      // больничный совместителя в среднюю численность не идёт так же, как у основных.
+      const v = st * e.daysInSrsch / calDays;
+      sovm += v;
+      rows.push({ idx: e.idx, fio: e.fio, role: "внешний совместитель", rate: st,
+                  list: 0, listHow: "не входит",
+                  srsch: 0, srschHow: "не входит",
+                  sovm: v, sovmHow: nr(st) + " × " + e.daysInSrsch + " дн." });
+      return;
+    }
+    // Человек попадает в показатели один раз, даже если у него две должности
+    const key = fioKey(e.fio);
+    const p = persons[key] || (persons[key] = { list: 0, avg: 0 });
+    p.list = Math.max(p.list, e.daysInList);
+    p.avg = Math.max(p.avg, e.daysInAvg);
+
+    const v = st * e.daysInSrsch / calDays;
+    srsch += v;
+    if (dirFio && key === dirFio) dirSrsch += v;
+
+    rows.push({
+      idx: e.idx, fio: e.fio, rate: st,
+      role: e.isInner ? "внутренний совместитель — вторая должность"
+          : byLaw[e.idx] ? "неполное время по закону"
+          : e.isPartTime ? "неполное время" : "основной работник",
+      list: e.isInner ? 0 : e.daysInList / calDays,
+      listHow: e.isInner ? "не удваивает человека" : e.daysInList + " дн.",
+      srsch: v,
+      srschHow: v === 0 ? "не входит" : nr(st) + " × " + e.daysInSrsch + " дн.",
+      avg: e.isInner ? 0 : e.daysInAvg / calDays,
+      avgHow: e.isInner ? "не удваивает человека"
+            : e.daysInAvg === 0 ? "не входит"
+            : e.daysInAvg + " дн.",
+      sovm: 0, sovmHow: "—"
+    });
+  });
+
+  let spisochnayaDays = 0, avgDays = 0;
+  Object.keys(persons).forEach((fio) => { spisochnayaDays += persons[fio].list; avgDays += persons[fio].avg; });
+
+  let gphDays = 0;
+  gphContracts.forEach((g) => {
+    const from = Math.max(1, Math.min(calDays, +g.from || 1));
+    const to = Math.max(from, Math.min(calDays, +g.to || calDays));
+    gphDays += (to - from + 1);
+  });
+
+  const spisochnaya = spisochnayaDays / calDays;
+  const osnovnye = avgDays / calDays;              // основные работники, людьми, без декретчиков
+  const gph = gphDays / calDays;
+
+  return {
+    spisochnaya: r1(spisochnaya),
+    srsch: r1(srsch),
+    sovmestiteli: r1(sovm),
+    gph: r1(gph),
+    osnovnye: r1(osnovnye),
+    // Средняя численность: основные работники ЛЮДЬМИ (без декретчиков)
+    // + внешние совместители по ставке + ГПД. Складываются округлённые составляющие.
+    total: r1(r1(osnovnye) + r1(sovm) + r1(gph)),
+    row56: r1(dirSrsch),
+    row57: r1(srsch - dirSrsch),
+    rows: rows,
+    raw: { spisochnayaDays: spisochnayaDays, avgDays: avgDays, persons: Object.keys(persons).length,
+           spisochnayaExact: spisochnaya, srschExact: srsch, sovmExact: sovm, osnovnyeExact: osnovnye,
+           gphDays: gphDays, calDays: calDays, workDays: tab.workDays }
+  };
+}
+
+/* ---- Период: 4-фонд заполняется не по одному месяцу ----
+
+   Строки 01 и 03 отчёта заполняются «с начала отчётного года»: берётся сумма
+   месячных показателей и делится на число месяцев периода. Месячные показатели
+   к этому моменту уже округлены до одного знака — так же, как их считает бухгалтер
+   по каждому табелю, и так же они сходятся с его расчётом.
+
+   Число месяцев берётся по загруженным табелям, а не угадывается: если между
+   месяцами дырка или период начинается не с января, страница об этом говорит,
+   а не делит на то, чего у неё нет. */
+const MONTH_NAMES = ["январь", "февраль", "март", "апрель", "май", "июнь",
+                     "июль", "август", "сентябрь", "октябрь", "ноябрь", "декабрь"];
+
+// Основы названий: в табелях встречается и «Июль 2026», и «за Июля 2026 года».
+// Порядок важен: «март» проверяется раньше «ма», иначе «марта» стало бы маем.
+const MONTH_STEMS = ["янв", "фев", "март", "апрел", "ма", "июн", "июл", "авг", "сент", "октя", "ноя", "дек"];
+
+// «Июль 2026» -> {year: 2026, month: 6}
+function periodOrder(period) {
+  const t = String(period || "").toLowerCase();
+  const y = t.match(/(20\d\d)/);
+  let m = -1;
+  for (let i = 0; i < MONTH_STEMS.length; i++) {
+    if (t.indexOf(MONTH_STEMS[i]) >= 0) { m = i; break; }
+  }
+  return (y && m >= 0) ? { year: +y[1], month: m, key: +y[1] * 12 + m } : null;
+}
+
+function monthTitle(key) {
+  return MONTH_NAMES[key % 12].replace(/^./, (c) => c.toUpperCase()) + " " + Math.floor(key / 12);
+}
+
+function periodAverage(months) {
+  const known = [], unknown = [];
+  months.forEach((m) => {
+    const at = periodOrder(m.period);
+    if (at) known.push({ key: at.key, period: m.period, srsch: m.srsch, total: m.total });
+    else unknown.push(m);
+  });
+  known.sort((a, b) => a.key - b.key);
+
+  const seen = {}, duplicates = [];
+  known.forEach((m) => {
+    if (seen[m.key]) duplicates.push(monthTitle(m.key));
+    seen[m.key] = true;
+  });
+
+  const gaps = [];
+  if (known.length > 1) {
+    for (let k = known[0].key; k <= known[known.length - 1].key; k++) {
+      if (!seen[k]) gaps.push(monthTitle(k));
+    }
+  }
+
+  const all = known.concat(unknown);
+  const count = all.length;
+  let sumSrsch = 0, sumTotal = 0;
+  all.forEach((m) => { sumSrsch += m.srsch; sumTotal += m.total; });
+
+  return {
+    count: count,
+    srsch: count ? round1(sumSrsch / count) : 0,
+    total: count ? round1(sumTotal / count) : 0,
+    sumSrsch: sumSrsch, sumTotal: sumTotal,
+    months: all,
+    gaps: gaps,
+    duplicates: duplicates,
+    unknown: unknown.length,
+    // Отчёт заполняется с начала года: если первый загруженный месяц не январь,
+    // это не годовой период, и делить на число загруженных месяцев для строки 01 нельзя.
+    fromJanuary: known.length > 0 && known[0].key % 12 === 0
+  };
+}
+
+/* ---- Числа, которые 1С написала в подвале табеля (для сверки) ---- */
+function parseFooterNumbers(footer) {
+  const get = (re) => { const m = (footer || "").match(re); return m ? parseFloat(m[1].replace(",", ".")) : null; };
+  return {
+    spisochnaya: get(/Списочная\s+численность\s*:\s*([\d.,]+)/i),
+    srsch: get(/Среднесписочная\s+численность\s*:\s*([\d.,]+)/i),
+    total: get(/Средняя\s+численность\s*:\s*([\d.,]+)/i)
+  };
+}
+
+/* ========================================================================
+   ЯДРО: конец.
+   ======================================================================== */
+
+/* ------------------------------ Интерфейс ------------------------------ */
+document.querySelectorAll('.nav-item').forEach(function (btn) {
+  btn.addEventListener('click', function () {
+    document.querySelectorAll('.nav-item').forEach(function (b) { b.classList.remove('active'); });
+    document.querySelectorAll('.content-section').forEach(function (s) { s.classList.remove('active'); });
+    btn.classList.add('active');
+    document.getElementById(btn.dataset.target).classList.add('active');
+  });
+});
+
+const CONFIG = JSON.parse(document.getElementById("codes-config").textContent);
+const $ = (id) => document.getElementById(id);
+const fmt1 = (x) => x.toFixed(1).replace(".", ",");
+
+/* Загруженные месяцы. TAB / MARKED / STATE — это всегда выбранный месяц: так весь
+   разбор, расшифровка и сверка остались прежними, а над ними появился период. */
+const MONTHS = [];
+let CUR = -1;
+let TAB = null, MARKED = null;
+let STATE = { byLaw: {}, gph: [], rates: {}, directorIdx: -1 };
+
+/* --- Загрузка файла --- */
+$("drop").addEventListener("click", () => $("file").click());
+$("drop").addEventListener("dragover", (e) => { e.preventDefault(); $("drop").classList.add("over"); });
+$("drop").addEventListener("dragleave", () => $("drop").classList.remove("over"));
+$("drop").addEventListener("drop", (e) => {
+  e.preventDefault(); $("drop").classList.remove("over");
+  if (e.dataTransfer.files[0]) loadFile(e.dataTransfer.files[0]);
+});
+$("file").addEventListener("change", (e) => { if (e.target.files[0]) loadFile(e.target.files[0]); });
+
+function loadFile(file) {
+  const reader = new FileReader();
+  reader.onload = () => loadBytes(new Uint8Array(reader.result), file.name);
+  reader.onerror = () => {
+    $("file-error").innerHTML = '<div class="note err" style="margin:14px 0 0">Не удалось прочитать файл с диска.</div>';
+  };
+  reader.readAsArrayBuffer(file);
+}
+
+function loadBytes(bytes, fileName) {
+  {
+    try {
+      const tab = parseTabel(readSpreadsheet(bytes));
+      const marked = classifyEmployees(tab, CONFIG);
+      const month = {
+        name: fileName, tab: tab, marked: marked,
+        state: {
+          byLaw: {}, gph: [], rates: {},
+          directorIdx: marked.employees.findIndex((e) => /директор|руководител/i.test(e.post))
+        }
+      };
+      // Тот же месяц, загруженный второй раз, заменяет прежний, а не удваивается.
+      const same = MONTHS.findIndex((m) => m.tab.period && m.tab.period === tab.period);
+      let replaced = "";
+      if (same >= 0) { replaced = MONTHS[same].name; MONTHS[same] = month; }
+      else MONTHS.push(month);
+
+      $("file-error").innerHTML = replaced && replaced !== fileName
+        ? '<div class="note warn" style="margin:14px 0 0">За ' + tab.period + ' уже был загружен файл <b>' +
+          replaced.replace(/[<&]/g, "") + '</b> — он заменён на <b>' + fileName.replace(/[<&]/g, "") + '</b>.</div>'
+        : "";
+      $("result").classList.remove("hidden");
+      $("drop").innerHTML = '<div style="font-size:15px"><b>' + fileName + '</b> загружен</div>' +
+        '<div>перетащите ещё один табель, чтобы добавить месяц к периоду</div>';
+      selectMonth(same >= 0 ? same : MONTHS.length - 1);
+    } catch (err) {
+      if (!MONTHS.length) $("result").classList.add("hidden");
+      $("file-error").innerHTML = '<div class="note err" style="margin:14px 0 0"><b>Файл не прочитан.</b> ' +
+        String(err.message || err).replace(/[<&]/g, "") + '</div>';
+    }
+  }
+}
+
+function selectMonth(i) {
+  CUR = i;
+  TAB = MONTHS[i].tab;
+  MARKED = MONTHS[i].marked;
+  STATE = MONTHS[i].state;
+  renderAll();
+}
+
+function removeMonth(i) {
+  MONTHS.splice(i, 1);
+  if (!MONTHS.length) {
+    CUR = -1; TAB = null; MARKED = null;
+    $("result").classList.add("hidden");
+    $("drop").innerHTML = '<div style="font-size:15px;margin-bottom:4px">Перетащите сюда <b>табель</b> из 1С</div>' +
+      '<div>или нажмите, чтобы выбрать файл — понимаются .xls и .xlsx</div>';
+    return;
+  }
+  selectMonth(Math.min(i, MONTHS.length - 1));
+}
+
+// Показатели одного месяца — с его собственными правками ставок, ГПД и руководителя.
+function resultOf(m) {
+  return computeHeadcount(m.tab, m.marked, CONFIG, m.state);
+}
+
+/* --- Отрисовка --- */
+function renderAll() {
+  renderMeta();
+  renderCodes();
+  renderEmployees();
+  renderDirector();
+  renderGph();
+  renderResult();          // считает и период тоже
+}
+
+function renderMonths() {
+  let h = '<tr><th>Период</th><th>Файл</th><th class="num">Списочная</th><th class="num">СрСЧ</th>' +
+          '<th class="num">Средняя</th><th></th></tr>';
+  // Показываем по возрастанию месяцев, а не в порядке загрузки: так видно дырки в периоде.
+  const order = MONTHS.map((m, i) => {
+    const at = periodOrder(m.tab.period);
+    return { i: i, key: at ? at.key : Infinity };
+  }).sort((a, b) => a.key - b.key);
+
+  order.forEach((o) => {
+    const m = MONTHS[o.i];
+    const r = resultOf(m);
+    const cur = o.i === CUR;
+    h += '<tr' + (cur ? ' style="background:var(--ok-bg)"' : '') + '>' +
+         '<td><b>' + (m.tab.period || "период не определён") + '</b></td>' +
+         '<td style="color:var(--text-muted)">' + m.name.replace(/[<&]/g, "") + '</td>' +
+         '<td class="num">' + fmt1(r.spisochnaya) + '</td>' +
+         '<td class="num">' + fmt1(r.srsch) + '</td>' +
+         '<td class="num">' + fmt1(r.total) + '</td>' +
+         '<td class="num" style="white-space:nowrap">' +
+           (cur ? '<span class="badge ok">показан ниже</span>'
+                : '<button class="link" data-show="' + o.i + '">показать</button>') +
+           ' <button class="link" data-del="' + o.i + '" style="margin-left:12px">убрать</button></td></tr>';
+  });
+  $("months-table").innerHTML = h;
+  $("months-table").querySelectorAll("[data-show]").forEach((b) => {
+    b.onclick = () => selectMonth(+b.dataset.show);
+  });
+  $("months-table").querySelectorAll("[data-del]").forEach((b) => {
+    b.onclick = () => removeMonth(+b.dataset.del);
+  });
+}
+
+function renderPeriod() {
+  const per = periodAverage(MONTHS.map((m) => {
+    const r = resultOf(m);
+    return { period: m.tab.period, srsch: r.srsch, total: r.total };
+  }));
+
+  $("period-kpi").innerHTML =
+    kpi("Строка 01<br>среднесписочная численность", per.srsch, true) +
+    kpi("Строка 03<br>средняя численность", per.total);
+
+  const formula = (sum, value) => fmt1(sum) + " ÷ " + per.count + " " +
+    (per.count === 1 ? "месяц" : per.count < 5 ? "месяца" : "месяцев") + " = <b>" + fmt1(value) + "</b>";
+
+  let h = '<div class="meta-line">Строка 01: ' +
+    per.months.map((m) => fmt1(m.srsch)).join(" + ") + " = " + formula(per.sumSrsch, per.srsch) + '</div>' +
+    '<div class="meta-line">Строка 03: ' +
+    per.months.map((m) => fmt1(m.total)).join(" + ") + " = " + formula(per.sumTotal, per.total) + '</div>';
+
+  if (per.gaps.length) {
+    h += '<div class="note err" style="margin:14px 0 0"><b>В периоде не хватает месяцев: ' +
+      per.gaps.join(", ") + '.</b> Показатели посчитаны только по загруженным табелям и потому неверны для отчёта — ' +
+      'добавьте недостающие месяцы.</div>';
+  }
+  if (per.duplicates.length) {
+    h += '<div class="note warn" style="margin:14px 0 0">Один и тот же месяц загружен дважды: ' +
+      per.duplicates.join(", ") + '.</div>';
+  }
+  if (per.unknown) {
+    h += '<div class="note warn" style="margin:14px 0 0">У ' + per.unknown +
+      ' табеля не удалось определить месяц — он посчитан в периоде, но проверить порядок месяцев страница не может.</div>';
+  }
+  if (!per.fromJanuary && !per.unknown) {
+    h += '<div class="note warn" style="margin:14px 0 0">Период начинается не с января. Строки 01 и 03 заполняются ' +
+      '<b>с начала отчётного года</b>: если отчёт годовой или за квартал не первый, загрузите табели начиная с января — ' +
+      'иначе делить на число месяцев нельзя.</div>';
+  }
+  h += '<div class="note plain" style="margin:14px 0 0">' +
+    'Строку 03 заполняют только коммерческие организации, имеющие право платить взносы ежеквартально, ' +
+    'и только в отчёте за январь–декабрь.</div>';
+
+  $("period-note").innerHTML = h;
+}
+
+function renderMeta() {
+  $("meta").innerHTML =
+    '<div class="meta-line">Период: <b style="color:var(--text-main)">' + (TAB.period || "не определён") + '</b></div>' +
+    '<div class="meta-line">Календарных дней: <b style="color:var(--text-main)">' + TAB.calDays + '</b>, ' +
+    'рабочих дней: <b style="color:var(--text-main)">' + TAB.workDays + '</b>, ' +
+    'сотрудников в табеле: <b style="color:var(--text-main)">' + TAB.employees.length + '</b></div>';
+}
+
+function renderCodes() {
+  const counts = {};
+  MARKED.employees.forEach((e) => e.statuses.forEach((s) => {
+    const key = s.kind === "hours" ? "(число — часы явки)" : s.kind === "none" ? "(пусто)" : s.code;
+    counts[key] = (counts[key] || 0) + 1;
+  }));
+
+  const unknown = Object.keys(MARKED.unknownCodes);
+  $("warnings").innerHTML = unknown.length
+    ? '<div class="note err"><b>Встречены коды, которых нет в справочнике: ' + unknown.map((u) => "«" + u + "»").join(", ") +
+      '.</b> Эти дни <b>не учтены нигде</b> — ни в списочной, ни в среднесписочной, поэтому числа ниже занижены. ' +
+      'Добавьте коды в блок настроек в начале файла (там же написано, какие флаги ставить), и расчёт станет полным.</div>'
+    : '<div class="note ok">Все коды в табеле известны справочнику.</div>';
+
+  let h = '<tr><th>Код</th><th class="num">Раз</th><th>Значение</th><th>Списочная</th><th>СрСЧ</th></tr>';
+  Object.keys(counts).sort((a, b) => counts[b] - counts[a]).forEach((k) => {
+    let name, inList, inSrsch;
+    if (k === "(число — часы явки)") { name = "явка, отработанные часы за день"; inList = "да"; inSrsch = "да"; }
+    else if (k === "(пусто)") { name = "не состоит в списке (принят или уволен внутри месяца)"; inList = "—"; inSrsch = "—"; }
+    else if (CONFIG["коды"][k]) {
+      name = CONFIG["коды"][k]["название"];
+      inList = CONFIG["коды"][k]["списочная"] ? "да" : "нет";
+      inSrsch = CONFIG["коды"][k]["срсч"] ? "да" : "нет";
+    } else { name = '<span class="badge err">код неизвестен</span>'; inList = "?"; inSrsch = "?"; }
+    h += '<tr><td><b>' + k + '</b></td><td class="num">' + counts[k] + '</td><td>' + name +
+         '</td><td>' + inList + '</td><td>' + inSrsch + '</td></tr>';
+  });
+  $("codes-table").innerHTML = h;
+}
+
+function renderEmployees() {
+  let h = '<tr><th>ФИО</th><th>Должность</th><th class="num">Норма ч</th><th class="num">Ставка</th>' +
+          '<th class="num">Дней в списке</th><th>Как учитывается</th>' +
+          '<th>Неполное<br>по закону</th></tr>';
+  let snapped = false;
+  MARKED.employees.forEach((e) => {
+    let how, cls = "ok";
+    if (e.isSovmestitel) { how = "внешний совместитель — только в среднюю, по ставке"; cls = "grey"; }
+    else if (e.isInner) { how = "вторая должность того же человека — в списочной не удваивается"; cls = "grey"; }
+    else if (e.daysInSrsch === 0) { how = "в списочной есть, в среднесписочной нет"; cls = "grey"; }
+    else if (STATE.byLaw[e.idx]) { how = "неполное по закону — целой единицей"; cls = "ok"; }
+    else { how = "в среднесписочной по ставке"; cls = "ok"; }
+
+    const shown = STATE.rates[e.idx] !== undefined ? STATE.rates[e.idx] : e.rate;
+    if (Math.abs(e.rate - e.rateRaw) > 0.001) snapped = true;
+
+    h += '<tr><td>' + e.fio + (e.unknownDays ? ' <span class="badge err">' + e.unknownDays + ' дн. с неизвестным кодом</span>' : '') +
+         '</td><td>' + e.post + '</td>' +
+         '<td class="num">' + (e.normHours || "—") + '</td>' +
+         '<td class="num"><input class="small" type="number" step="0.05" min="0" max="2" value="' +
+             (Math.round(shown * 1000) / 1000) + '" data-rate="' + e.idx + '"></td>' +
+         '<td class="num">' + e.daysInList + '</td>' +
+         '<td><span class="badge ' + cls + '">' + how + '</span></td>' +
+         '<td>' + (!e.isSovmestitel
+            ? '<input type="checkbox" data-bylaw="' + e.idx + '"' + (STATE.byLaw[e.idx] ? " checked" : "") + '>'
+            : '') + '</td></tr>';
+  });
+  $("emp-table").innerHTML = h;
+  $("emp-table").querySelectorAll("[data-bylaw]").forEach((cb) => {
+    cb.addEventListener("change", () => {
+      STATE.byLaw[+cb.dataset.bylaw] = cb.checked;
+      renderEmployees(); renderResult();
+    });
+  });
+  $("emp-table").querySelectorAll("[data-rate]").forEach((inp) => {
+    inp.addEventListener("input", () => {
+      const v = parseFloat(String(inp.value).replace(",", "."));
+      STATE.rates[+inp.dataset.rate] = isFinite(v) && v > 0 ? v : undefined;
+      renderResult();
+    });
+  });
+  $("rate-note").innerHTML = snapped
+    ? 'Ставка вычислена из графы «Часовая норма»: норма сотрудника делится на самую большую норму в табеле, ' +
+      'результат подтянут к ближайшей круглой доле. В одном табеле полная норма бывает разной — ' +
+      'у медиков сокращённая неделя, у администрации обычная, — поэтому <b>ставку стоит проверить и при ' +
+      'необходимости поправить прямо в таблице</b>.'
+    : 'Ставка вычислена из графы «Часовая норма». При необходимости поправьте прямо в таблице.';
+}
+
+function renderDirector() {
+  let h = '<option value="-1">— не выбран —</option>';
+  MARKED.employees.forEach((e) => {
+    h += '<option value="' + e.idx + '"' + (e.idx === STATE.directorIdx ? " selected" : "") + '>' +
+         e.fio + " — " + e.post + '</option>';
+  });
+  $("director").innerHTML = h;
+  $("director").onchange = () => { STATE.directorIdx = +$("director").value; renderResult(); };
+}
+
+function renderGph() {
+  let h = "";
+  STATE.gph.forEach((g, i) => {
+    h += '<div class="gph-row">' +
+      '<input type="text" value="' + (g.name || "") + '" data-gph-name="' + i + '" placeholder="ФИО или номер договора">' +
+      ' с <input class="small" type="number" min="1" max="' + TAB.calDays + '" value="' + g.from + '" data-gph-from="' + i + '">' +
+      ' по <input class="small" type="number" min="1" max="' + TAB.calDays + '" value="' + g.to + '" data-gph-to="' + i + '">' +
+      ' число <button class="link" data-gph-del="' + i + '">удалить</button></div>';
+  });
+  if (!STATE.gph.length) h = '<div class="meta-line">Договоров подряда не внесено — показатель по ГПД считается нулевым.</div>';
+  $("gph-rows").innerHTML = h;
+  $("gph-rows").querySelectorAll("[data-gph-del]").forEach((b) => b.addEventListener("click", () => {
+    STATE.gph.splice(+b.dataset.gphDel, 1); renderGph(); renderResult();
+  }));
+  const bind = (attr, key, isNum) => $("gph-rows").querySelectorAll("[data-gph-" + attr + "]").forEach((el) =>
+    el.addEventListener("input", () => {
+      STATE.gph[+el.dataset["gph" + key]][attr] = isNum ? +el.value : el.value;
+      renderResult();
+    }));
+  bind("name", "Name", false); bind("from", "From", true); bind("to", "To", true);
+}
+$("gph-add").addEventListener("click", () => {
+  STATE.gph.push({ name: "", from: 1, to: TAB ? TAB.calDays : 31 });
+  renderGph(); renderResult();
+});
+
+function renderResult() {
+  const r = resultOf(MONTHS[CUR]);
+  renderMonths();                     // в списке месяцев те же числа — правки должны попадать и туда
+  renderPeriod();
+  $("result-month").textContent = TAB.period ? "— " + TAB.period : "";
+
+  $("kpi").innerHTML =
+    kpi("Списочная численность<br>в среднем за месяц", r.spisochnaya) +
+    kpi("Среднесписочная численность<br>за этот месяц", r.srsch, true) +
+    kpi("Средняя численность<br>внешних совместителей", r.sovmestiteli) +
+    kpi("Средняя численность<br>по ГПД", r.gph) +
+    kpi("Средняя численность<br>в целом по организации", r.total, true);
+
+  let h = '<tr><th>Показатель</th><th class="num">Значение</th><th>Как посчитано</th></tr>';
+  const row = (n, v, how) => '<tr><td>' + n + '</td><td class="num"><b>' + fmt1(v) + '</b></td><td style="color:var(--text-muted)">' + how + '</td></tr>';
+  h += row("Списочная численность в среднем за месяц", r.spisochnaya,
+           "людей: " + r.raw.persons + " · " + r.raw.spisochnayaDays + " человеко-дней ÷ " +
+           r.raw.calDays + " кал. дней · целыми единицами, без внешних совместителей");
+  h += row("Среднесписочная численность (СрСЧ)", r.srsch,
+           "сумма ставок основных работников, без декретчиков · " + r.raw.srschExact.toFixed(3));
+  h += row("Основные работники для средней численности", r.osnovnye,
+           "людьми, без декретчиков · " + r.raw.avgDays + " человеко-дней ÷ " + r.raw.calDays + " кал. дней");
+  h += row("Средняя численность внешних совместителей", r.sovmestiteli,
+           "по ставке, по дням среднесписочной · " + r.raw.sovmExact.toFixed(3));
+  h += row("Средняя численность по ГПД", r.gph,
+           r.raw.gphDays + " человеко-дней ÷ " + r.raw.calDays + " календарных дней");
+  h += row("Средняя численность в целом по организации", r.total,
+           "основные работники (людьми) + внешние совместители (по ставке) + ГПД");
+  h += row("Строка 56 — СрСЧ руководителя", r.row56,
+           STATE.directorIdx >= 0 ? MARKED.employees[STATE.directorIdx].fio : "руководитель не выбран");
+  h += row("Строка 57 — СрСЧ без руководителя", r.row57, "СрСЧ минус строка 56");
+  $("detail-table").innerHTML = h;
+
+  renderBreakdown(r);
+  renderCrosscheck(r);
+}
+
+/* Полная расшифровка: сколько дней каким кодом, и какой вклад дал каждый
+   сотрудник в каждый показатель. Суммы столбцов должны сходиться с итогами выше. */
+function renderBreakdown(r) {
+  const n3 = (x) => x.toFixed(3).replace(".", ",");
+  // Столбец совместителей показывается, только если они в табеле есть: иначе это
+  // колонка из одних прочерков, которая зря отнимает ширину у остальных.
+  const hasSovm = r.rows.some((x) => x.sovm > 0);
+  const cal = r.raw.calDays;
+  // Знаменатель у всех один и тот же — он в шапке, а не в каждой ячейке.
+  const numHead = (title, formula) =>
+    '<th class="num val">' + title + '<div class="how">' + formula + ' ÷ ' + cal + ' кал. дн.</div></th>';
+  let h = '<tr><th>ФИО</th><th>Как учитывается</th><th class="num">Ставка</th><th>Дни по кодам</th>' +
+          numHead("В списочную", "дни") + numHead("В СрСЧ", "ставка × дни") +
+          numHead("В среднюю", "1 чел. × дни") +
+          // мягкий перенос: длинное слово иначе не даёт столбцу сузиться на узком экране
+          (hasSovm ? numHead("В совмести&shy;телей", "ставка × дни") : '') + '</tr>';
+
+  r.rows.forEach((row) => {
+    const e = MARKED.employees[row.idx];
+    const counts = {};
+    e.statuses.forEach((s) => {
+      const k = s.kind === "hours" ? "явка" : s.kind === "none" ? "нет в списке"
+              : s.kind === "unknown" ? "«" + s.code + "» неизвестен" : s.code;
+      counts[k] = (counts[k] || 0) + 1;
+    });
+    const days = Object.keys(counts).map((k) => k + " " + counts[k]).join(" · ");
+    const cell = (v, how) => '<td class="num val">' + (v ? '<b>' + n3(v) + '</b>' : "—") +
+      '<div class="how">' + how + '</div></td>';
+
+    h += '<tr><td class="fio">' + e.fio + '</td>' +
+         '<td style="color:var(--text-muted)">' + row.role + '</td>' +
+         '<td class="num">' + String(Math.round(row.rate * 1000) / 1000).replace(".", ",") + '</td>' +
+         '<td class="days">' + days +
+         (e.workedHours ? ' · всего ' + String(e.workedHours).replace(".", ",") + ' ч' : '') + '</td>' +
+         cell(row.list, row.listHow) + cell(row.srsch, row.srschHow) +
+         cell(row.avg || 0, row.avgHow || "—") +
+         (hasSovm ? cell(row.sovm, row.sovmHow) : '') + '</tr>';
+  });
+
+  const sum = (k) => r.rows.reduce((s, x) => s + (x[k] || 0), 0);
+  const totals = (label, list, srsch, avg, sovm) =>
+    '<tr style="font-weight:600"><td colspan="4">' + label + '</td>' +
+    '<td class="num">' + list + '</td><td class="num">' + srsch + '</td><td class="num">' + avg + '</td>' +
+    (hasSovm ? '<td class="num">' + sovm + '</td>' : '') + '</tr>';
+  h += totals("Итого до округления", n3(sum("list")), n3(sum("srsch")), n3(sum("avg")), n3(sum("sovm")));
+  h += totals("После округления до одного знака",
+              fmt1(r.spisochnaya), fmt1(r.srsch), fmt1(r.osnovnye), fmt1(r.sovmestiteli));
+  $("breakdown-table").innerHTML = h;
+  updateBreakdownHint();
+}
+
+/* Подсказка про прокрутку показывается, только если таблица правда не помещается. */
+function updateBreakdownHint() {
+  const wrap = $("breakdown-table").parentNode;
+  const clipped = wrap.scrollWidth > wrap.clientWidth + 1;
+  $("breakdown-hint").classList.toggle("hidden", !clipped);
+}
+window.addEventListener("resize", () => { if (MARKED) updateBreakdownHint(); });
+
+function kpi(label, value, accent) {
+  return '<div class="kpi' + (accent ? " accent" : "") + '"><div class="lbl">' + label +
+         '</div><div class="val">' + fmt1(value) + '</div></div>';
+}
+
+function renderCrosscheck(r) {
+  const f = parseFooterNumbers(TAB.footer);
+  if (f.spisochnaya === null && f.srsch === null && f.total === null) {
+    $("crosscheck-card").classList.add("hidden");
+    return;
+  }
+  $("crosscheck-card").classList.remove("hidden");
+  const cmp = [
+    ["Списочная численность", f.spisochnaya, r.spisochnaya],
+    ["Среднесписочная численность", f.srsch, r.srsch],
+    ["Средняя численность", f.total, r.total]
+  ];
+  let diff = false;
+  let h = '<table><tr><th>Показатель</th><th class="num">1С</th><th class="num">Этот расчёт</th><th>Итог</th></tr>';
+  cmp.forEach((c) => {
+    if (c[1] === null) return;
+    const same = Math.abs(c[1] - c[2]) < 0.05;
+    if (!same) diff = true;
+    h += '<tr><td>' + c[0] + '</td><td class="num">' + fmt1(c[1]) + '</td><td class="num">' + fmt1(c[2]) +
+         '</td><td>' + (same ? '<span class="badge ok">совпало</span>'
+                             : '<span class="badge">разница ' + fmt1(c[2] - c[1]) + '</span>') + '</td></tr>';
+  });
+  h += '</table>';
+  if (diff) {
+    h += '<div class="note warn" style="margin:14px 0 0">Расхождение с 1С — ожидаемо. ' +
+      '1С считает всех целыми единицами: не применяет ставки в среднесписочной и приписывает ' +
+      'внешним совместителям и внутреннему совместителю по целому человеку. ' +
+      'Этот расчёт сверен с расчётом бухгалтера вручную и расходится с 1С сознательно.</div>';
+  }
+  $("crosscheck").innerHTML = h;
+}
+</script>
+
+<script>
+"use strict";
+/* ==========================================================================
+   КАЛЬКУЛЯТОР ЗАРПЛАТЫ. Перенесён из отдельной страницы целиком и обёрнут
+   в замыкание: у расчёта численности есть свой $ и свои имена, в общей
+   области видимости они бы столкнулись.
+   ========================================================================== */
+(function () {
 "use strict";
 
 /* ===========================================================================
@@ -738,4 +2436,8 @@ document.addEventListener("change", render);
 
 sync();
 render();
+
+}());
 </script>
+</body>
+</html>
