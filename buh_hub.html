@@ -37,8 +37,12 @@
     "О":  { "название": "трудовой отпуск",                      "списочная": true, "срсч": true,  "средняя": true },
     "П":  { "название": "праздничный день",                     "списочная": true, "срсч": true,  "средняя": true },
     "ОЖ": { "название": "отпуск по уходу за ребёнком (декрет)", "списочная": true, "срсч": false, "средняя": false },
+    "Д":  { "название": "декретный отпуск",                     "списочная": true, "срсч": false, "средняя": false },
     "Б":  { "название": "больничный",                           "списочная": true, "срсч": false, "средняя": true },
-    "А":  { "название": "отпуск за свой счёт",                  "списочная": true, "срсч": false, "средняя": true }
+    "А":  { "название": "отпуск за свой счёт",                  "списочная": true, "срсч": false, "средняя": true },
+    "К":  { "название": "командировка",                         "списочная": true, "срсч": true,  "средняя": true },
+    "--": { "название": "уволен — в списке не состоит (1С 8; в других версиях клетка пустая)",
+                                                                "списочная": false, "срсч": false, "средняя": false }
   }
 }
 </script>
@@ -844,8 +848,11 @@ function parseTabel(sheet) {
 
 /* ---- Классификация дня по коду ---- */
 function classifyDay(text, config) {
-  const t = (text || "").trim();
+  let t = (text || "").trim();
   if (t === "") return { kind: "none" };
+  // Уволенного 1С 8 рисует прочерками, и рисует по-разному («-», «--», тире).
+  // Приводим к одному виду, а что с ним делать — как и у всех кодов, написано в справочнике.
+  if (/^[-–—]+$/.test(t)) t = "--";
   if (/^\d+([.,]\d+)?$/.test(t)) {
     return { kind: "hours", hours: parseFloat(t.replace(",", ".")), list: true, srsch: true, avg: true };
   }
@@ -895,6 +902,13 @@ function deriveRate(normHours, allNorms) {
   return snapRate(normHours / allNorms[0]);
 }
 
+/* Ключ человека: одна и та же фамилия в разных строках табеля пишется то со звёздочкой,
+   то с лишним пробелом. Сравниваем по нормализованному виду, иначе один человек
+   распадётся на двух. */
+function fioKey(fio) {
+  return String(fio || "").replace(/\*/g, "").replace(/\s+/g, " ").trim().toLowerCase();
+}
+
 /* ---- Разметка сотрудников: кто как учитывается ---- */
 function classifyEmployees(tab, config) {
   const norms = [];
@@ -919,9 +933,11 @@ function classifyEmployees(tab, config) {
     // Внутренний совместитель — вторая должность того же человека, а не второй человек.
     // Проверяется раньше внешнего: «(Внутренний совместитель)» не должен попасть во внешние.
     const isInner = /внутренн[а-яё]*\s+совместител/i.test(e.post);
-    // В табелях 1С внешний совместитель помечен словом в должности, в другой форме —
-    // звёздочкой у фамилии (внизу такого табеля стоит сноска «* - совместитель»).
-    const isSovmestitel = !isInner && (/совместител/i.test(e.post) || /\*/.test(e.fio) || /\*/.test(e.post));
+    // В табелях 1С внешний совместитель помечен словом в должности (иногда сокращённо
+    // «совм.»), в другой форме — звёздочкой у фамилии (внизу такого табеля стоит
+    // сноска «* - совместитель»).
+    const isSovmestitel = !isInner &&
+      (/совместител/i.test(e.post) || /совм\./i.test(e.post) || /\*/.test(e.fio) || /\*/.test(e.post));
     const rateRaw = fullNorm > 0 ? e.normHours / fullNorm : 1;
     const rate = deriveRate(e.normHours, norms);
     return {
@@ -934,6 +950,21 @@ function classifyEmployees(tab, config) {
       hoursSrsch: hoursSrsch, unknownDays: unknownDays, statuses: statuses
     };
   });
+
+  // Одно и то же ФИО в двух строках — это один человек на двух должностях, а не два
+  // человека и не внешний совместитель. Вторая и следующие строки идут внутренним
+  // совместительством, даже если в табеле это ничем не помечено.
+  const firstRow = {};
+  list.forEach((e) => {
+    const key = fioKey(e.fio);
+    if (firstRow[key] === undefined) { firstRow[key] = e.idx; return; }
+    e.isInner = true;
+    e.isSovmestitel = false;
+    // Раз человек занимает здесь две должности, он работает у этого нанимателя,
+    // а значит и первая его строка — не внешнее совместительство.
+    list[firstRow[key]].isSovmestitel = false;
+  });
+
   return { employees: list, fullNorm: fullNorm, norms: norms, unknownCodes: unknown };
 }
 
@@ -976,7 +1007,8 @@ function computeHeadcount(tab, marked, config, opts) {
     const o = rateOverride[e.idx];
     return (typeof o === "number" && isFinite(o) && o > 0) ? o : e.rate;
   };
-  const dirFio = directorIdx >= 0 && marked.employees[directorIdx] ? marked.employees[directorIdx].fio : null;
+  // По руководителю (строка 56) складываются обе его должности, если их две.
+  const dirFio = directorIdx >= 0 && marked.employees[directorIdx] ? fioKey(marked.employees[directorIdx].fio) : null;
 
   let srsch = 0, sovm = 0, dirSrsch = 0;
   const persons = {};                                           // ФИО -> {списочная, средняя} в днях, по человеку
@@ -996,13 +1028,14 @@ function computeHeadcount(tab, marked, config, opts) {
       return;
     }
     // Человек попадает в показатели один раз, даже если у него две должности
-    const p = persons[e.fio] || (persons[e.fio] = { list: 0, avg: 0 });
+    const key = fioKey(e.fio);
+    const p = persons[key] || (persons[key] = { list: 0, avg: 0 });
     p.list = Math.max(p.list, e.daysInList);
     p.avg = Math.max(p.avg, e.daysInAvg);
 
     const v = st * e.daysInSrsch / calDays;
     srsch += v;
-    if (dirFio && e.fio === dirFio) dirSrsch += v;
+    if (dirFio && key === dirFio) dirSrsch += v;
 
     rows.push({
       idx: e.idx, fio: e.fio, rate: st,

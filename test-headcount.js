@@ -135,7 +135,45 @@ eq("ОЖ (декрет) — НЕ в СрСЧ", M.classifyDay("ОЖ", CONFIG).srs
 eq("Б (больничный) — в списочной", M.classifyDay("Б", CONFIG).list, true);
 eq("Б (больничный) — НЕ в СрСЧ", M.classifyDay("Б", CONFIG).srsch, false);
 eq("А (за свой счёт) — в списочной", M.classifyDay("А", CONFIG).list, true);
+eq("К (командировка) — в СрСЧ", M.classifyDay("К", CONFIG).srsch, true);
+// «Д» — второй код декрета, ведёт себя как ОЖ (правила от 06.08.2026)
+eq("Д (декрет) — в списочной", M.classifyDay("Д", CONFIG).list, true);
+eq("Д (декрет) — НЕ в СрСЧ", M.classifyDay("Д", CONFIG).srsch, false);
+eq("Д (декрет) — НЕ в средней", M.classifyDay("Д", CONFIG).avg, false);
+// Уволенного 1С 8 рисует прочерками; в других версиях клетка просто пустая
+eq("«--» (уволен) — не в списочной", M.classifyDay("--", CONFIG).list, false);
+eq("одиночный прочерк — тоже уволен", M.classifyDay("-", CONFIG).list, false);
+eq("длинное тире — тоже уволен", M.classifyDay("—", CONFIG).kind, "code");
 eq("неизвестный код не угадывается", M.classifyDay("Щ", CONFIG).kind, "unknown");
+
+console.log("\n--- Совместители: сокращение «совм.» и задвоенные фамилии ---");
+const tabOf = (rows) => ({
+  period: "Июль 2026", calDays: 31, workDays: 22, footer: "", dayCount: 31,
+  employees: rows.map((r) => ({ fio: r[0], post: r[1], normHours: 175, workedHours: 0,
+                                days: new Array(31).fill("В") }))
+});
+let m = M.classifyEmployees(tabOf([["Сотрудник 1", "администратор"],
+                                   ["Сотрудник 2", "врач (совм.)"]]), CONFIG);
+eq("«совм.» в должности — внешний совместитель", m.employees[1].isSovmestitel, true);
+eq("обычная должность — не совместитель", m.employees[0].isSovmestitel, false);
+
+// Правило от 06.08.2026: задвоенное ФИО — это внутреннее совместительство,
+// даже когда в табеле нет никакой пометки.
+m = M.classifyEmployees(tabOf([["Сотрудник 1", "директор"],
+                               ["Сотрудник 1", "бухгалтер"]]), CONFIG);
+eq("то же ФИО второй строкой — внутренний совместитель", m.employees[1].isInner, true);
+eq("первая строка остаётся основной", m.employees[0].isInner, false);
+eq("вторая строка — не внешний совместитель", m.employees[1].isSovmestitel, false);
+
+m = M.classifyEmployees(tabOf([["Сотрудник 1", "врач (совм.)"],
+                               ["Сотрудник 1 *", "врач-стоматолог"]]), CONFIG);
+eq("задвоенное ФИО сильнее пометки о совместительстве", m.employees[0].isSovmestitel, false);
+eq("звёздочка не мешает узнать того же человека", m.employees[1].isInner, true);
+
+const twoPosts = tabOf([["Сотрудник 1", "директор"], ["Сотрудник 1", "бухгалтер"]]);
+const hc = M.computeHeadcount(twoPosts, M.classifyEmployees(twoPosts, CONFIG), CONFIG, {});
+eq("две должности одного человека — списочная 1,0", hc.spisochnaya, 1);
+eq("...а в среднесписочной ставки складываются", hc.srsch, 2);
 
 console.log("\n--- Подтягивание ставки к круглой доле ---");
 eq("42,1 / 175 = 0,241 -> 0,25", M.snapRate(42.1 / 175), 0.25);
