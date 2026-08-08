@@ -797,11 +797,6 @@ details { border-top: 1px solid var(--line); }
           <div class="table-wrap tall"><table id="breakdown-table"></table></div>
         </div>
 
-        <div class="card" id="crosscheck-card">
-          <h2>Сверка с подвалом табеля</h2>
-          <div id="crosscheck"></div>
-        </div>
-
       </div>
 
       <div class="card">
@@ -1235,7 +1230,7 @@ function parseTabel(sheet) {
   };
 
   // Метаданные: период и количество дней
-  let period = "", calDays = 0, workDays = 0, footer = "";
+  let period = "", calDays = 0, workDays = 0;
   for (let r = 0; r <= sheet.maxRow; r++) {
     for (let c = 0; c <= sheet.maxCol; c++) {
       const t = txt(r, c);
@@ -1248,7 +1243,6 @@ function parseTabel(sheet) {
       if (m1) calDays = +m1[1];
       const m2 = t.match(/рабочих\s+дней\s*:?\s*(\d+)/i);
       if (m2) workDays = +m2[1];
-      if (/численность\s*:/i.test(t)) footer = t;
     }
   }
 
@@ -1332,7 +1326,7 @@ function parseTabel(sheet) {
   if (!employees.length) throw new Error("В табеле не найдено ни одного сотрудника.");
 
   return { period: period, calDays: calDays, workDays: workDays,
-           employees: employees, footer: footer, dayCount: dayCols.length };
+           employees: employees, dayCount: dayCols.length };
 }
 
 /* ---- Классификация дня по коду ---- */
@@ -1691,16 +1685,6 @@ function periodAverage(months) {
   };
 }
 
-/* ---- Числа, которые 1С написала в подвале табеля (для сверки) ---- */
-function parseFooterNumbers(footer) {
-  const get = (re) => { const m = (footer || "").match(re); return m ? parseFloat(m[1].replace(",", ".")) : null; };
-  return {
-    spisochnaya: get(/Списочная\s+численность\s*:\s*([\d.,]+)/i),
-    srsch: get(/Среднесписочная\s+численность\s*:\s*([\d.,]+)/i),
-    total: get(/Средняя\s+численность\s*:\s*([\d.,]+)/i)
-  };
-}
-
 /* ========================================================================
    ЯДРО: конец.
    ======================================================================== */
@@ -2048,7 +2032,6 @@ function renderResult() {
   $("detail-table").innerHTML = h;
 
   renderBreakdown(r);
-  renderCrosscheck(r);
 }
 
 /* Полная расшифровка: сколько дней каким кодом, и какой вклад дал каждый
@@ -2121,37 +2104,6 @@ function kpi(label, value, accent) {
          '</div><div class="val">' + fmt1(value) + '</div></div>';
 }
 
-function renderCrosscheck(r) {
-  const f = parseFooterNumbers(TAB.footer);
-  if (f.spisochnaya === null && f.srsch === null && f.total === null) {
-    $("crosscheck-card").classList.add("hidden");
-    return;
-  }
-  $("crosscheck-card").classList.remove("hidden");
-  const cmp = [
-    ["Списочная численность", f.spisochnaya, r.spisochnaya],
-    ["Среднесписочная численность", f.srsch, r.srsch],
-    ["Средняя численность", f.total, r.total]
-  ];
-  let diff = false;
-  let h = '<table><tr><th>Показатель</th><th class="num">1С</th><th class="num">Этот расчёт</th><th>Итог</th></tr>';
-  cmp.forEach((c) => {
-    if (c[1] === null) return;
-    const same = Math.abs(c[1] - c[2]) < 0.05;
-    if (!same) diff = true;
-    h += '<tr><td>' + c[0] + '</td><td class="num">' + fmt1(c[1]) + '</td><td class="num">' + fmt1(c[2]) +
-         '</td><td>' + (same ? '<span class="badge ok">совпало</span>'
-                             : '<span class="badge">разница ' + fmt1(c[2] - c[1]) + '</span>') + '</td></tr>';
-  });
-  h += '</table>';
-  if (diff) {
-    h += '<div class="note warn" style="margin:14px 0 0">Расхождение с 1С — ожидаемо. ' +
-      '1С считает всех целыми единицами: не применяет ставки в среднесписочной и приписывает ' +
-      'внешним совместителям и внутреннему совместителю по целому человеку. ' +
-      'Этот расчёт сверен с расчётом бухгалтера вручную и расходится с 1С сознательно.</div>';
-  }
-  $("crosscheck").innerHTML = h;
-}
 </script>
 
 <script>

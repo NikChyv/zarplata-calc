@@ -16,7 +16,7 @@ const endMark = html.indexOf("ЯДРО: конец.");
 const core = html.slice(html.indexOf("const CP1251_HIGH ="), html.lastIndexOf("/*", endMark));
 const M = new Function(core + `
   return { cp1251, readOleStream, readBiffCells, parseTabel, classifyDay, snapRate, round1,
-           classifyEmployees, computeHeadcount, parseFooterNumbers, readSpreadsheet, readXlsxCells, inflateRaw, readZip,
+           classifyEmployees, computeHeadcount, readSpreadsheet, readXlsxCells, inflateRaw, readZip,
            periodOrder, periodAverage };`)();
 
 const CONFIG = JSON.parse(html.split('id="codes-config">')[1].split("</script>")[0]);
@@ -170,7 +170,7 @@ eq("неизвестный код не угадывается", M.classifyDay("�
 
 console.log("\n--- Совместители: сокращение «совм.» и задвоенные фамилии ---");
 const tabOf = (rows) => ({
-  period: "Июль 2026", calDays: 31, workDays: 22, footer: "", dayCount: 31,
+  period: "Июль 2026", calDays: 31, workDays: 22, dayCount: 31,
   employees: rows.map((r) => ({ fio: r[0], post: r[1], normHours: 175, workedHours: 0,
                                 days: new Array(31).fill("В") }))
 });
