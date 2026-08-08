@@ -193,6 +193,24 @@
       radial-gradient(farthest-side at 100% 50%, rgba(0,0,0,.2), rgba(0,0,0,0)) right / 14px 100% no-repeat scroll;
   }
 
+  /* Таблицы по сотрудникам растут вместе со штатом: на двадцати строках карточка
+     занимает три экрана и всё остальное уезжает из виду. Поэтому им задана высота,
+     а шапка и итоги прилипают к краям, чтобы при прокрутке было видно, что где. */
+  /* Высота от экрана, а не жёсткая: на ноутбуке видно больше строк, на телефоне
+     таблица не занимает всё окно. */
+  .table-wrap.tall { max-height: clamp(320px, 55vh, 620px); overflow-y: auto; }
+  .table-wrap.tall thead th {
+    position: sticky; top: 0; z-index: 2;
+    background: var(--bg-content);
+    box-shadow: inset 0 -1px 0 var(--border);   /* граница у прилипшей строки не держится, рисуем тенью */
+  }
+  .table-wrap.tall tfoot td {
+    position: sticky; bottom: 0; z-index: 2;
+    background: var(--bg-content);
+    box-shadow: inset 0 1px 0 var(--border);
+  }
+  .table-wrap.tall thead th, .table-wrap.tall tfoot td { border-bottom-color: transparent; }
+
   /* Расшифровка — самая широкая таблица на странице: 7–8 столбцов, в каждом числовом
      ещё и формула. Формулам разрешено переноситься, иначе они распирают таблицу
      и выталкивают её за край карточки. */
@@ -741,7 +759,7 @@ details { border-top: 1px solid var(--line); }
 
         <div class="card">
           <h2>Сотрудники и категории <span class="sub">отметьте тех, у кого неполное время установлено по закону</span></h2>
-          <table id="emp-table"></table>
+          <div class="table-wrap tall"><table id="emp-table"></table></div>
           <div class="note plain" id="rate-note" style="margin:14px 0 0"></div>
           <div class="note warn" style="margin:14px 0 0">
             Неполное рабочее время <b>по соглашению с нанимателем</b> учитывается в среднесписочной численности
@@ -776,7 +794,7 @@ details { border-top: 1px solid var(--line); }
           <div id="breakdown-hint" class="hidden" style="color:var(--text-muted);font-size:12.5px;margin:0 0 10px">
             Таблица шире экрана — прокрутите её вбок или разверните окно, чтобы увидеть все столбцы.
           </div>
-          <div class="table-wrap"><table id="breakdown-table"></table></div>
+          <div class="table-wrap tall"><table id="breakdown-table"></table></div>
         </div>
 
         <div class="card" id="crosscheck-card">
@@ -1911,9 +1929,9 @@ function renderCodes() {
 }
 
 function renderEmployees() {
-  let h = '<tr><th>ФИО</th><th>Должность</th><th class="num">Норма ч</th><th class="num">Ставка</th>' +
+  let h = '<thead><tr><th>ФИО</th><th>Должность</th><th class="num">Норма ч</th><th class="num">Ставка</th>' +
           '<th class="num">Дней в списке</th><th>Как учитывается</th>' +
-          '<th>Неполное<br>по закону</th></tr>';
+          '<th>Неполное<br>по закону</th></tr></thead><tbody>';
   let snapped = false;
   MARKED.employees.forEach((e) => {
     let how, cls = "ok";
@@ -1937,6 +1955,7 @@ function renderEmployees() {
             ? '<input type="checkbox" data-bylaw="' + e.idx + '"' + (STATE.byLaw[e.idx] ? " checked" : "") + '>'
             : '') + '</td></tr>';
   });
+  h += '</tbody>';
   $("emp-table").innerHTML = h;
   $("emp-table").querySelectorAll("[data-bylaw]").forEach((cb) => {
     cb.addEventListener("change", () => {
@@ -2043,11 +2062,11 @@ function renderBreakdown(r) {
   // Знаменатель у всех один и тот же — он в шапке, а не в каждой ячейке.
   const numHead = (title, formula) =>
     '<th class="num val">' + title + '<div class="how">' + formula + ' ÷ ' + cal + ' кал. дн.</div></th>';
-  let h = '<tr><th>ФИО</th><th>Как учитывается</th><th class="num">Ставка</th><th>Дни по кодам</th>' +
+  let h = '<thead><tr><th>ФИО</th><th>Как учитывается</th><th class="num">Ставка</th><th>Дни по кодам</th>' +
           numHead("В списочную", "дни") + numHead("В СрСЧ", "ставка × дни") +
           numHead("В среднюю", "1 чел. × дни") +
           // мягкий перенос: длинное слово иначе не даёт столбцу сузиться на узком экране
-          (hasSovm ? numHead("В совмести&shy;телей", "ставка × дни") : '') + '</tr>';
+          (hasSovm ? numHead("В совмести&shy;телей", "ставка × дни") : '') + '</tr></thead><tbody>';
 
   r.rows.forEach((row) => {
     const e = MARKED.employees[row.idx];
@@ -2071,14 +2090,20 @@ function renderBreakdown(r) {
          (hasSovm ? cell(row.sovm, row.sovmHow) : '') + '</tr>';
   });
 
+  h += '</tbody>';
+
+  // Итоги — в tfoot: при прокрутке они остаются приклеенными к низу таблицы,
+  // потому что ради них расшифровку и открывают.
   const sum = (k) => r.rows.reduce((s, x) => s + (x[k] || 0), 0);
   const totals = (label, list, srsch, avg, sovm) =>
     '<tr style="font-weight:600"><td colspan="4">' + label + '</td>' +
     '<td class="num">' + list + '</td><td class="num">' + srsch + '</td><td class="num">' + avg + '</td>' +
     (hasSovm ? '<td class="num">' + sovm + '</td>' : '') + '</tr>';
+  h += '<tfoot>';
   h += totals("Итого до округления", n3(sum("list")), n3(sum("srsch")), n3(sum("avg")), n3(sum("sovm")));
   h += totals("После округления до одного знака",
               fmt1(r.spisochnaya), fmt1(r.srsch), fmt1(r.osnovnye), fmt1(r.sovmestiteli));
+  h += '</tfoot>';
   $("breakdown-table").innerHTML = h;
   updateBreakdownHint();
 }
